@@ -1,0 +1,81 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --brand-hue: 155; /* SeedSync Green */
+  --brand-primary: oklch(55% 0.18 var(--brand-hue));
+  --brand-primary-light: oklch(90% 0.1 var(--brand-hue));
+  --brand-dark: oklch(15% 0.05 160);
+  
+  --surface: #ffffff;
+  --surface-raised: #f8fafc;
+  --border: #e2e8f0;
+  --text: #0f172a;
+  --text-muted: #64748b;
+
+  --radius-lg: 1.5rem; /* 24px per high-end aesthetic */
+  --radius-md: 1rem;   /* 16px */
+  --radius-sm: 0.6rem; /* 10px */
+}
+
+@layer base {
+  body {
+    @apply antialiased bg-[#F8F9FA] text-slate-900 overflow-x-hidden;
+    font-family: 'Outfit', 'Inter', system-ui, -apple-system, sans-serif;
+  }
+}
+
+@layer components {
+  .glass-card {
+    @apply bg-white/80 backdrop-blur-md border border-white/40 shadow-xl shadow-slate-200/50;
+  }
+  
+  .btn-primary {
+    @apply bg-gradient-to-br from-[#10B981] to-[#059669] text-white font-black py-4 px-8 rounded-2xl shadow-xl shadow-emerald-200 hover:-translate-y-1 hover:brightness-110 active:translate-y-0 transition-all flex items-center justify-center gap-2;
+  }
+
+  .nav-item {
+    @apply w-full flex items-center gap-3 px-6 py-4 rounded-2xl transition-all font-bold text-sm;
+  }
+  
+  .nav-active {
+    @apply bg-white/10 text-emerald-400 shadow-inner;
+  }
+}
+
+/* Custom Scrollbar */
+::-webkit-scrollbar {
+  width: 6px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: #e2e8f0;
+  border-radius: 10px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #cbd5e1;
+}
+
+/* Animations */
+@keyframes float {
+  0% { transform: translateY(0px); }
+  50% { transform: translateY(-10px); }
+  100% { transform: translateY(0px); }
+}
+
+.animate-float {
+  animation: float 6s ease-in-out infinite;
+}
+
+/* Mesh Gradient Background */
+.mesh-bg {
+  background-color: #f1f5f9;
+  background-image: 
+    radial-gradient(at 0% 0%, rgba(16, 185, 129, 0.1) 0px, transparent 50%),
+    radial-gradient(at 100% 0%, rgba(52, 211, 153, 0.05) 0px, transparent 50%),
+    radial-gradient(at 100% 100%, rgba(16, 185, 129, 0.1) 0px, transparent 50%),
+    radial-gradient(at 0% 100%, rgba(5, 150, 105, 0.05) 0px, transparent 50%);
+}
