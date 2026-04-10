@@ -6,6 +6,7 @@ from ..config import GOOGLE_SERVICE_ACCOUNT_PATH
 from ..audit import log
 
 SCOPES = ["https://www.googleapis.com/auth/spreadsheets.readonly"]
+QUOTA_BACKOFF_SECS = [5, 10, 20]  # Exponential wait times on Google API 429 errors
 
 _client: gspread.Client | None = None
 
@@ -26,9 +27,7 @@ async def fetch_new_rows(
     """
     Async wrapper for gspread with exponential backoff for quota resilience.
     """
-    retries = [5, 10, 20] # Wait times
-    
-    for wait_time in retries + [0]: # Last attempt has no wait
+    for wait_time in QUOTA_BACKOFF_SECS + [0]:  # Last attempt has no wait
         try:
             return await asyncio.to_thread(_fetch_sync, sheet_id, worksheet_name, last_row_index)
         except Exception as e:

@@ -31,7 +31,7 @@ class ZApiProvider:
             if r.is_success:
                 return SendResult(success=True, status_code=r.status_code)
             return SendResult(success=False, status_code=r.status_code,
-                              error=r.text[:300])
+                              error=r.text[:200])
         except Exception as e:
             return SendResult(success=False, error=str(e))
 
@@ -48,7 +48,7 @@ class ZApiProvider:
             if r.is_success:
                 return SendResult(success=True, status_code=r.status_code)
             return SendResult(success=False, status_code=r.status_code,
-                              error=r.text[:300])
+                              error=r.text[:200])
         except Exception as e:
             return SendResult(success=False, error=str(e))
 

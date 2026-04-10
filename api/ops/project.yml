@@ -1,0 +1,11 @@
+kind: backend
+runtime: python
+install_cmd: "python3 -m venv venv && ./venv/bin/pip install -r requirements.txt"
+build_cmd: ""
+start_cmd: "./venv/bin/gunicorn app.main:app --workers 2 --worker-class uvicorn.workers.UvicornWorker --bind 0.0.0.0:8001"
+pm2_name: "seedsync-api"
+port: 8001
+requires_nginx: true
+domains:
+  - api.seedsync.3fventure.tech
+healthcheck: /health

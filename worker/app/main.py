@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import random
 from typing import Dict, Any
 from .config import POLL_INTERVAL_SECONDS, SUPABASE_URL, SUPABASE_HEADERS, DRY_RUN
 from .audit import log
@@ -16,13 +17,18 @@ logging.getLogger("httpcore").setLevel(logging.WARNING)
 # Checks CLIENTS_PER_BATCH clients every POLL_INTERVAL_SECONDS.
 # Optimized for Quota Safety: 5 clients/min ensures we stay under Google's 60 req/min.
 CLIENTS_PER_BATCH = 5
+# Hard wall on how long a single client is allowed to take (covers slow Sheets reads + DB writes)
+CLIENT_PROCESS_TIMEOUT_SECS = 30
+# Maximum simultaneous gspread calls — keeps us under Google's 60 req/min quota
+MAX_CONCURRENT_SHEETS = 2
+# Jitter range between task launches to spread API pressure across time
+STAGGER_MIN_SECS, STAGGER_MAX_SECS = 1.0, 3.0
 
 # Global rotating offset — persists across job cycles within the same process
 _client_offset = 0
 
 # Global Semaphore to prevent "burst" pressure on Google Sheets API
-# Only 2 concurrent sheet reads allowed at any millisecond monorepo-wide
-_sheets_semaphore = asyncio.Semaphore(2)
+_sheets_semaphore = asyncio.Semaphore(MAX_CONCURRENT_SHEETS)
 
 
 async def fetch_all_configs():
@@ -47,14 +53,16 @@ async def update_cursor(config_id: str, new_index: int):
     if DRY_RUN:
         return
     try:
-        await http_client.patch(
+        r = await http_client.patch(
             f"{SUPABASE_URL}/rest/v1/source_configs",
             headers=SUPABASE_HEADERS,
             params={"id": "eq." + config_id},
             json={"last_row_index": new_index}
         )
-    except Exception:
-        pass
+        if not r.is_success:
+            log("scheduler", "cursor_update_failed", config_id=config_id, new_index=new_index, error=r.text[:200])
+    except Exception as e:
+        log("scheduler", "cursor_update_exception", config_id=config_id, new_index=new_index, error=str(e))
 
 
 async def process_client(conf: Dict[str, Any]):
@@ -89,6 +97,10 @@ async def process_client(conf: Dict[str, Any]):
                     return 0
 
                 # 4. Calculate new High-Water Mark (strictly forward only)
+                # Row numbering: row 1 = header, row 2 = first data row.
+                # last_index is a 0-based count of data rows seen so far, so the
+                # next unread sheet row is (last_index + 2). We subtract 2 because
+                # len(rows) includes blank rows up to the end of the fetched range.
                 start_row_actual = max(2, last_index + 2)
                 highest_row_now = start_row_actual + len(rows) - 2
                 new_index = max(last_index, highest_row_now)
@@ -98,13 +110,13 @@ async def process_client(conf: Dict[str, Any]):
                     return (new_index - last_index)
                 return 0
 
-            # Apply a 30-second hard limit to this individual client's processing
-            new_count = await asyncio.wait_for(_run_sync(), timeout=30.0)
+            # Apply a hard time limit to this individual client's processing
+            new_count = await asyncio.wait_for(_run_sync(), timeout=CLIENT_PROCESS_TIMEOUT_SECS)
             if new_count > 0:
                 log("scheduler", "client_finished", client=client_id, new_rows=new_count)
 
         except asyncio.TimeoutError:
-            log("scheduler", "client_timeout", client=client_id, seconds=30)
+            log("scheduler", "client_timeout", client=client_id, seconds=CLIENT_PROCESS_TIMEOUT_SECS)
         except Exception as e:
             log("scheduler", "client_error", client=client_id, error=str(e))
 
@@ -144,10 +156,9 @@ async def run_ingestion_batch():
 
     # Process batch with slight sequential jitter to further spread load
     tasks = []
-    import random
     for conf in batch:
         tasks.append(process_client(conf))
-        await asyncio.sleep(random.uniform(1.0, 3.0)) # Staggered launch
+        await asyncio.sleep(random.uniform(STAGGER_MIN_SECS, STAGGER_MAX_SECS))  # Staggered launch
 
     await asyncio.gather(*tasks, return_exceptions=True)
 

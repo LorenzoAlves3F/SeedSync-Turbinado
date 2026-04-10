@@ -1,6 +1,5 @@
 import re
 from dataclasses import dataclass, field
-from typing import List, Dict, Optional, Any
 
 
 # DDDs in Brazil that historically required the 9th digit (mobile only)
@@ -48,7 +47,7 @@ class PhoneResult:
     country: str        # "BR", "US", "UNKNOWN"
     valid: bool
     mobile_likely: bool
-    flags: List[str] = field(default_factory=list)
+    flags: list[str] = field(default_factory=list)
 
 
 def normalize(raw: str, default_country: str = "BR") -> PhoneResult:
@@ -59,7 +58,7 @@ def normalize(raw: str, default_country: str = "BR") -> PhoneResult:
     Returns a PhoneResult. Always check result.valid before sending.
     """
     original = raw or ""
-    flags: List[str] = []
+    flags: list[str] = []
 
     # ── Step 1: Strip everything except digits and leading +
     cleaned = re.sub(r"[^\d+]", "", original.strip())
@@ -99,7 +98,7 @@ def normalize(raw: str, default_country: str = "BR") -> PhoneResult:
     )
 
 
-def _normalize_br(original: str, local_digits: str, flags: List[str]) -> PhoneResult:
+def _normalize_br(original: str, local_digits: str, flags: list[str]) -> PhoneResult:
     """Apply Brazil-specific rules to a local digit string (no country code prefix)."""
 
     # Strip any leading zeros (legacy trunk prefix)

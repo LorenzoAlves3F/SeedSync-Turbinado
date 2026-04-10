@@ -12,10 +12,26 @@ from ..audit import log
 from .validator import sanitize_identifier
 
 
+DEDUP_CHUNK_SIZE = 50  # Max fingerprints per PostgREST IN() filter call
+ERROR_TEXT_MAX_LEN = 200  # Max characters captured from error response bodies
+
+
 class LeadIngester:
     """Core logic for lead processing: async and batch optimized."""
 
     def __init__(self, client_id: str, config: dict):
+        """
+        Args:
+            client_id: Unique identifier for this client (e.g. "GEOTECH").
+            config: A source_configs row from Supabase. Required keys:
+                - target_table (str): Supabase table to insert leads into.
+                - phone_column (str): Sheet column header for the phone number.
+                - name_column (str): Sheet column header for the lead name.
+                - destination_phones (list[str]): WhatsApp numbers to notify.
+                Optional keys:
+                - clickup_enabled (bool), clickup_list_id (str): ClickUp alerts.
+                - legacy_phone (str): Fallback destination if destination_phones is empty.
+        """
         self.client_id = client_id
         self.config = config
         self.target_table = config["target_table"]
@@ -80,7 +96,7 @@ class LeadIngester:
                     json=sanitized_leads
                 )
                 if not ins_res.is_success:
-                    log("ingester", "batch_insert_failed", client=self.client_id, error=ins_res.text[:200])
+                    log("ingester", "batch_insert_failed", client=self.client_id, error=ins_res.text[:ERROR_TEXT_MAX_LEN])
                     # RAISE: This stops the scheduler from advancing the last_row_index
                     raise Exception(f"Database insertion failed: {ins_res.text[:100]}")
             except Exception as e:
@@ -98,19 +114,33 @@ class LeadIngester:
         return success_count
 
     async def _process_single_lead_lifecycle(self, row: dict, fingerprint: str) -> str:
-        """Helper to handle notification and logging for one lead within a batch."""
-        # Step A: Notify
+        """
+        Handle notification and logging for one lead.
+
+        Order matters: log the fingerprint BEFORE notifying.
+        If the log write fails this coroutine raises, which causes asyncio.gather
+        to propagate the error, process_batch catches it, and the cursor does NOT
+        advance — so the same rows are retried next cycle. Once the log write
+        finally succeeds, the dedup check on the next cycle will catch the
+        fingerprint and skip re-notification. This is the primary guard against
+        the duplicate-send loop.
+        """
+        # Step A: Record fingerprint first — raises on failure so cursor stays back
+        await self._log_ingestion(row, fingerprint, "inserted", "pending")
+
+        # Step B: Notify (fingerprint already in log — safe even if notification fails)
         notify_status = await self._notify(row)
-        
-        # Step B: Log
-        await self._log_ingestion(row, fingerprint, "inserted", notify_status)
+
+        # Step C: Update whatsapp_status (best-effort — notification already sent, don't abort)
+        await self._patch_log_whatsapp_status(fingerprint, notify_status)
+
         return "inserted"
 
     async def _check_duplicates_bulk(self, fingerprints: list[str]) -> set[str] | None:
         """Check which fingerprints already exist. Returns None on error to trigger fail-safe."""
         try:
             existing = set()
-            chunk_size = 50
+            chunk_size = DEDUP_CHUNK_SIZE
             headers = {**SUPABASE_HEADERS} # Uses default public schema
             
             for i in range(0, len(fingerprints), chunk_size):
@@ -128,7 +158,7 @@ class LeadIngester:
                 if r.is_success:
                     existing.update(item["row_fingerprint"] for item in r.json())
                 else:
-                    log("ingester", "bulk_check_http_error", error=r.text[:200])
+                    log("ingester", "bulk_check_http_error", error=r.text[:ERROR_TEXT_MAX_LEN])
                     return None
             return existing
         except Exception as e:
@@ -188,15 +218,17 @@ class LeadIngester:
             else:
                 statuses.append("failed")
                 
-                # Create ClickUp failure task if enabled
+                # Create ClickUp failure task if enabled (background — must log its own errors)
                 if self.config.get("clickup_enabled") and self.config.get("clickup_list_id"):
-                    # Use a background task for clickup to avoid blocking
-                    asyncio.create_task(create_failure_task(
+                    async def _safe_clickup(list_id: str, title: str, desc: str) -> None:
+                        try:
+                            await create_failure_task(list_id=list_id, title=title, description=desc, assignees=[], priority=1)
+                        except Exception as cu_err:
+                            log("ingester", "clickup_task_exception", client=self.client_id, error=str(cu_err))
+                    asyncio.create_task(_safe_clickup(
                         list_id=self.config.get("clickup_list_id"),
                         title=f"Falha Notificação ({self.client_id})",
-                        description=f"Falha ao enviar mensagem para {dest} do lead {name_raw}: {send_res.error}",
-                        assignees=[],
-                        priority=1
+                        desc=f"Falha ao enviar mensagem para {dest} do lead {name_raw}: {send_res.error}",
                     ))
                 else:
                     log("ingester", "clickup_alert_disabled", client=self.client_id)
@@ -204,20 +236,45 @@ class LeadIngester:
         return "sent" if "sent" in statuses else "failed"
 
     async def _log_ingestion(self, row: dict, fingerprint: str, status: str, whatsapp_status: str):
-        """Async logging using the correct schema."""
+        """
+        Write to ingestion_log. RAISES on failure.
+
+        Callers depend on this raising so that asyncio.gather propagates the
+        error, process_batch aborts, and the cursor does not advance. This is
+        the mechanism that prevents the duplicate-send loop.
+        """
+        log_entry = {
+            "client_id": self.client_id,
+            "row_fingerprint": fingerprint,
+            "raw_payload": row,
+            "status": status,
+            "whatsapp_status": whatsapp_status,
+            "processed_at": datetime.now(timezone.utc).isoformat()
+        }
+        headers = {**SUPABASE_HEADERS}
+        r = await http_client.post(
+            f"{SUPABASE_URL}/rest/v1/ingestion_log",
+            headers=headers,
+            json=log_entry
+        )
+        if not r.is_success:
+            log("ingester", "log_write_failed", client=self.client_id,
+                http_status=r.status_code, error=r.text[:ERROR_TEXT_MAX_LEN])
+            raise Exception(f"ingestion_log write failed ({r.status_code}): {r.text[:80]}")
+
+    async def _patch_log_whatsapp_status(self, fingerprint: str, whatsapp_status: str):
+        """Best-effort update of whatsapp_status after notification. Does NOT raise."""
         try:
-            log_entry = {
-                "client_id": self.client_id,
-                "row_fingerprint": fingerprint,
-                "raw_payload": row,
-                "status": status,
-                "whatsapp_status": whatsapp_status,
-                "processed_at": datetime.now(timezone.utc).isoformat()
-            }
-            # Async write using standard public profile
             headers = {**SUPABASE_HEADERS}
-            r = await http_client.post(f"{SUPABASE_URL}/rest/v1/ingestion_log", headers=headers, json=log_entry)
-            if not r.is_success:
-                log("ingester", "log_write_failed", client=self.client_id, error=r.text[:200])
+            await http_client.patch(
+                f"{SUPABASE_URL}/rest/v1/ingestion_log",
+                headers=headers,
+                params={
+                    "row_fingerprint": f"eq.{fingerprint}",
+                    "client_id": f"eq.{self.client_id}",
+                },
+                json={"whatsapp_status": whatsapp_status},
+            )
         except Exception as e:
-            log("ingester", "log_write_exception", client=self.client_id, error=str(e))
+            log("ingester", "log_status_patch_failed", client=self.client_id,
+                fp_prefix=fingerprint[:8], error=str(e))

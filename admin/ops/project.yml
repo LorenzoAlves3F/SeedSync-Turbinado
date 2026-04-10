@@ -1,0 +1,11 @@
+kind: frontend
+runtime: node
+install_cmd: "npm install"
+build_cmd: "npm run build"
+start_cmd: "npm run preview -- --host --port 3000"
+pm2_name: "seedsync-admin"
+port: 3000
+requires_nginx: true
+domains:
+  - seedsync.3fventure.tech
+healthcheck: /

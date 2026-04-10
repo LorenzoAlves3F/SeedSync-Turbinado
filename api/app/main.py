@@ -20,8 +20,8 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="Seed Sync API", lifespan=lifespan)
 
-# Allowed origins from env or default to all for local dev
-origins = os.getenv("CORS_ORIGINS", "*").split(",")
+# Allowed origins from env — must be set explicitly in production
+origins = os.getenv("CORS_ORIGINS", "http://localhost:5173").split(",")
 
 app.add_middleware(
     CORSMiddleware,
@@ -183,7 +183,7 @@ async def get_logs(
 
     headers = {**SUPABASE_HEADERS, "Accept-Profile": "seed_sync"}
     r = await http_client.get(
-        f"{SUPABASE_URL}/rest/v1/ingestion_logs",
+        f"{SUPABASE_URL}/rest/v1/ingestion_log",
         headers=headers,
         params=params,
     )
@@ -221,24 +221,6 @@ async def reset_all_cursors():
         count += 1
         
     return {"status": "reset_initiated", "cluster_size": count, "buffer_size": 50}
-
-
-# ──────────────────── Configs by ID ────────────────────
-
-@app.get("/configs/{client_id}")
-async def get_config(client_id: str):
-    r = await http_client.get(
-        f"{SUPABASE_URL}/rest/v1/source_configs",
-        headers=SUPABASE_HEADERS,
-        params={"client_id": f"eq.{client_id}", "limit": "1"},
-    )
-    if not r.is_success:
-        raise HTTPException(status_code=r.status_code, detail=r.text)
-    data = r.json()
-    if not data:
-        raise HTTPException(status_code=404, detail="Client not found")
-    return data[0]
-
 
 
 
