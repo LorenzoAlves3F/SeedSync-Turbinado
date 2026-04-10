@@ -1,9 +1,10 @@
 import React, { useEffect, useState } from 'react';
 import {
-  Search, Power, PowerOff, Trash2, ExternalLink,
-  CheckCircle2, XCircle, Loader2, RefreshCw, FileText, Settings2,
-  ChevronRight, Database, Phone, Hash, MoreVertical
+  Search, Trash2, ExternalLink,
+  Loader2, RefreshCw, FileText, Settings2,
+  Database, Phone, Hash
 } from 'lucide-react';
+
 import { fetchConfigs, updateConfig, deleteConfig, type SourceConfig } from '../lib/api';
 
 interface ClientListProps {

@@ -24,9 +24,27 @@ async def fetch_new_rows(
     last_row_index: int,
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     """
-    Async-friendly wrapper for gspread.
+    Async wrapper for gspread with exponential backoff for quota resilience.
     """
-    return await asyncio.to_thread(_fetch_sync, sheet_id, worksheet_name, last_row_index)
+    retries = [5, 10, 20] # Wait times
+    
+    for wait_time in retries + [0]: # Last attempt has no wait
+        try:
+            return await asyncio.to_thread(_fetch_sync, sheet_id, worksheet_name, last_row_index)
+        except Exception as e:
+            # Check for Google Quota / Rate Limit errors (429)
+            err_msg = str(e).lower()
+            is_quota = "quota" in err_msg or "429" in err_msg or "rate limit" in err_msg
+            
+            if is_quota and wait_time > 0:
+                log("sheets", "quota_backoff", sheet_id=sheet_id, wait=wait_time)
+                await asyncio.sleep(wait_time)
+                continue
+            
+            # If not quota or out of retries, re-raise to the generic handler
+            raise e
+    
+    return [], {} # Fallback
 
 
 def _fetch_sync(sheet_id: str, worksheet_name: str, last_row_index: int):
@@ -96,5 +114,5 @@ def _fetch_sync(sheet_id: str, worksheet_name: str, last_row_index: int):
         return new_rows, header_sample
 
     except Exception as e:
-        log("sheets", "fetch_error", sheet_id=sheet_id, error=str(e))
+        log("sheets", "fetch_error", sheet_id=sheet_id, error=str(e) or type(e).__name__)
         return [], {}

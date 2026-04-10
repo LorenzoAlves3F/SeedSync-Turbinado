@@ -1,16 +1,19 @@
-import { useEffect, useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
-  Activity, CheckCircle2, XCircle, Users, Loader2,
-  BarChart3, RefreshCw, Zap, ArrowUpRight, ShieldCheck, 
+  Activity, Users, Loader2,
+  RefreshCw, Zap, ArrowUpRight, ShieldCheck,
   Clock, TrendingUp, AlertCircle
 } from 'lucide-react';
-import { fetchConfigs, fetchLogs, type SourceConfig, type IngestionLog } from '../lib/api';
+import { fetchConfigs, fetchLogs, syncReset, type SourceConfig, type IngestionLog } from '../lib/api';
+import { ToastContainer } from './Toast';
+import { useToast } from '../hooks/useToast';
 
 const Dashboard: React.FC = () => {
   const [configs, setConfigs] = useState<SourceConfig[]>([]);
   const [recentLogs, setRecentLogs] = useState<IngestionLog[]>([]);
   const [loading, setLoading] = useState(true);
   const [syncing, setSyncing] = useState(false);
+  const { toasts, addToast, dismissToast } = useToast();
 
   const load = async () => {
     setLoading(true);
@@ -21,7 +24,7 @@ const Dashboard: React.FC = () => {
       ]);
       setConfigs(cfgs);
       setRecentLogs(logs);
-    } catch (e) {
+    } catch (e: unknown) {
       console.error('Dashboard load failed', e);
     } finally {
       setLoading(false);
@@ -32,13 +35,16 @@ const Dashboard: React.FC = () => {
     if (syncing) return;
     setSyncing(true);
     try {
-      // Direct call to our new sync reset endpoint
-      await fetch('http://localhost:8000/configs/sync-reset', { method: 'POST' });
-      // Trigger a local refresh
+      const res = await syncReset();
+      addToast(
+        'success', 
+        'Sincronização Iniciada', 
+        `O sistema resetou ${res.cluster_size} nodes com buffer de ${res.buffer_size} linhas.`
+      );
       await load();
-      alert('Sincronização forçada iniciada! O sistema verificará as últimas 50 linhas de cada planilha.');
-    } catch (e) {
-      console.error('Sync reset failed', e);
+    } catch (e: unknown) {
+      const error = e instanceof Error ? e : new Error('Erro desconhecido');
+      addToast('error', 'Falha na Sincronização', error.message);
     } finally {
       setSyncing(false);
     }
@@ -228,6 +234,7 @@ const Dashboard: React.FC = () => {
           </button>
         </section>
       </div>
+      <ToastContainer toasts={toasts} onDismiss={dismissToast} />
     </div>
   );
 };

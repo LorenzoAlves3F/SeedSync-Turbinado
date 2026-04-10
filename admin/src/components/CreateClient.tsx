@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import React, { useState } from 'react';
 import { 
   LayoutPanelLeft, 
   ArrowRight, Loader2, RefreshCw, 
@@ -6,11 +6,9 @@ import {
   Globe, Fingerprint, Zap, ShieldCheck
 } from 'lucide-react';
 import axios from 'axios';
-
-const API_URL = 'http://localhost:8000'; 
-
+import api, { type SourceConfig } from '../lib/api';
 interface CreateClientProps {
-  initialConfig?: any;
+  initialConfig?: SourceConfig | null;
   onSuccess?: () => void;
 }
 
@@ -53,14 +51,14 @@ const CreateClient: React.FC<CreateClientProps> = ({ initialConfig, onSuccess })
     setLoading(true);
     setError('');
     try {
-      const res = await axios.get(`${API_URL}/sheets/${id}/worksheets`);
+      const worksheets = await api.get<{id: string, title: string}[]>(`/sheets/${id}/worksheets`).then(r => r.data);
       setSheetId(id);
-      setWorksheets(res.data);
-      if (res.data.length > 0 && selectedWorksheets.length === 0 && !initialConfig) {
-        setSelectedWorksheets([{ title: res.data[0].title, phones: [''] }]);
+      setWorksheets(worksheets);
+      if (worksheets.length > 0 && selectedWorksheets.length === 0 && !initialConfig) {
+        setSelectedWorksheets([{ title: worksheets[0].title, phones: [''] }]);
       }
       setStep(2);
-    } catch (err: any) {
+    } catch {
       setError('Handshake failed. Ensure the service email has ARCHIVE access.');
     } finally {
       setLoading(false);
@@ -71,9 +69,9 @@ const CreateClient: React.FC<CreateClientProps> = ({ initialConfig, onSuccess })
     setLoading(true);
     setError('');
     try {
-      const res = await axios.get(`${API_URL}/sheets/${sheetId}/worksheets`);
-      setWorksheets(res.data);
-    } catch (err) {
+      const worksheetsData = await api.get<{id: string, title: string}[]>(`/sheets/${sheetId}/worksheets`).then(r => r.data);
+      setWorksheets(worksheetsData);
+    } catch {
       setError('Relay error. Could not fetch tabs.');
     } finally {
       setLoading(false);
@@ -101,10 +99,10 @@ const CreateClient: React.FC<CreateClientProps> = ({ initialConfig, onSuccess })
     setLoading(true);
     setError('');
     try {
-      const res = await axios.get(`${API_URL}/sheets/${sheetId}/worksheets/${selectedWorksheets[0].title}/columns`);
-      setColumns(res.data);
+      const columnsData = await api.get<string[]>(`/sheets/${sheetId}/worksheets/${selectedWorksheets[0].title}/columns`).then(r => r.data);
+      setColumns(columnsData);
       setStep(3);
-    } catch (err) {
+    } catch {
       setError('Mapping failed. Structure unreadable.');
     } finally {
       setLoading(false);
@@ -162,11 +160,11 @@ const CreateClient: React.FC<CreateClientProps> = ({ initialConfig, onSuccess })
           clickup_enabled: clickupEnabled,
           clickup_list_id: clickupListId || null
         };
-        await axios.patch(`${API_URL}/configs/${initialConfig.client_id}`, payload);
+        await api.patch(`/configs/${initialConfig.client_id}`, payload);
       } else {
         const promises = selectedWorksheets.map(sws => {
           const tabName = selectedWorksheets.length > 1 ? `${name} - ${sws.title}` : name;
-          return axios.post(`${API_URL}/configs`, {
+          return api.post('/configs', {
             name: tabName,
             sheet_id: sheetId,
             worksheet_name: sws.title,
@@ -185,8 +183,14 @@ const CreateClient: React.FC<CreateClientProps> = ({ initialConfig, onSuccess })
 
       if (onSuccess) onSuccess();
       else alert(initialConfig ? 'Deployment Updated!' : 'Cluster Deployed Successfully!');
-    } catch (err: any) {
-      setError('Deployment failed: ' + (err.response?.data?.detail || err.message));
+    } catch (e: unknown) {
+      let message = 'Unknown error';
+      if (axios.isAxiosError(e)) {
+        message = e.response?.data?.detail || e.message;
+      } else if (e instanceof Error) {
+        message = e.message;
+      }
+      setError('Deployment failed: ' + message);
     } finally {
       setLoading(false);
     }

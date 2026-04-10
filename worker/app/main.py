@@ -14,12 +14,15 @@ logging.getLogger("httpcore").setLevel(logging.WARNING)
 
 # ── Rotating Batch Config ──────────────────────────────────────────────────
 # Checks CLIENTS_PER_BATCH clients every POLL_INTERVAL_SECONDS.
-# With 10 clients/min and ~60 clients => full cycle every ~6 minutes.
-# Keeps well under Google's 60 requests/min quota.
-CLIENTS_PER_BATCH = 10
+# Optimized for Quota Safety: 5 clients/min ensures we stay under Google's 60 req/min.
+CLIENTS_PER_BATCH = 5
 
 # Global rotating offset — persists across job cycles within the same process
 _client_offset = 0
+
+# Global Semaphore to prevent "burst" pressure on Google Sheets API
+# Only 2 concurrent sheet reads allowed at any millisecond monorepo-wide
+_sheets_semaphore = asyncio.Semaphore(2)
 
 
 async def fetch_all_configs():
@@ -55,56 +58,55 @@ async def update_cursor(config_id: str, new_index: int):
 
 
 async def process_client(conf: Dict[str, Any]):
-    """Async task to sync a single client with strict internal timeout protection."""
+    """Async task to sync a single client with strict internal timeout and concurrency control."""
     client_id = conf["client_id"]
     sheet_id = conf["sheet_id"]
     worksheet = conf["worksheet_name"]
     last_index = conf["last_row_index"]
 
-    try:
-        # Wrap the actual ingestion in an internal timeout to prevent hangs
-        # within individual spreadsheet reads.
-        async def _run_sync():
-            # 1. Fetch new rows with overlap (buffered check)
-            # The fetcher now starts 5 rows back automatically.
-            rows, header_sample = await fetch_new_rows(sheet_id, worksheet, last_index)
-            if not rows:
+    # Use semaphore to throttle concurrent Google Sheets requests
+    async with _sheets_semaphore:
+        try:
+            # Wrap the actual ingestion in an internal timeout
+            async def _run_sync():
+                # 1. Fetch new rows strictly forward
+                rows, header_sample = await fetch_new_rows(sheet_id, worksheet, last_index)
+                if not rows:
+                    return 0
+
+                # 2. Ensure schema exists
+                is_ready = await ensure_table_columns(conf["target_table"], header_sample)
+                if not is_ready:
+                    return 0
+
+                # 3. Process batch
+                ingester = LeadIngester(client_id, conf)
+                try:
+                    success_count = await ingester.process_batch(rows)
+                except Exception as e:
+                    # ABORT CURSOR UPDATE IF INSERTION FAILED
+                    log("scheduler", "batch_processing_aborted", client=client_id, error=str(e))
+                    return 0
+
+                # 4. Calculate new High-Water Mark (strictly forward only)
+                start_row_actual = max(2, last_index + 2)
+                highest_row_now = start_row_actual + len(rows) - 2
+                new_index = max(last_index, highest_row_now)
+                
+                if new_index > last_index:
+                    await update_cursor(conf["id"], new_index)
+                    return (new_index - last_index)
                 return 0
 
-            # 2. Ensure schema exists
-            is_ready = await ensure_table_columns(conf["target_table"], header_sample)
-            if not is_ready:
-                return 0
+            # Apply a 30-second hard limit to this individual client's processing
+            new_count = await asyncio.wait_for(_run_sync(), timeout=30.0)
+            if new_count > 0:
+                log("scheduler", "client_finished", client=client_id, new_rows=new_count)
 
-            # 3. Process batch (dedup will safely handle the 5 overlap rows)
-            ingester = LeadIngester(client_id, conf)
-            success_count = await ingester.process_batch(rows)
-
-            # 4. Calculate new High-Water Mark
-            # Since fetcher looked at 'max(2, last_row_index + 2 - 5)', we shift forward.
-            # If we found 5 overlap rows + 7 new rows = 12 total, then:
-            # new_index = original_last + 7 new ones.
-            start_row_actual = max(2, last_index + 2 - 5)
-            # Row index is (row_relative_to_sheet - 1)
-            highest_row_now = start_row_actual + len(rows) - 2 # -2 to convert back to index
-            
-            # Ensure we only ever move the pointer FORWARD
-            new_index = max(last_index, highest_row_now)
-            
-            if new_index > last_index:
-                await update_cursor(conf["id"], new_index)
-                return (new_index - last_index) # return true new count
-            return 0
-
-        # Apply a 20-second hard limit to this individual client's processing
-        new_count = await asyncio.wait_for(_run_sync(), timeout=20.0)
-        if new_count > 0:
-            log("scheduler", "client_finished", client=client_id, new_rows=new_count)
-
-    except asyncio.TimeoutError:
-        log("scheduler", "client_timeout", client=client_id, seconds=20, note="Moved to next client to prevent freeze.")
-    except Exception as e:
-        log("scheduler", "client_error", client=client_id, error=str(e))
+        except asyncio.TimeoutError:
+            log("scheduler", "client_timeout", client=client_id, seconds=30)
+        except Exception as e:
+            log("scheduler", "client_error", client=client_id, error=str(e))
 
 
 async def run_ingestion_batch():
@@ -117,14 +119,20 @@ async def run_ingestion_batch():
         return
 
     total = len(all_configs)
-
-    # Wrap around the offset so it cycles forever
     _client_offset = _client_offset % total
     batch = all_configs[_client_offset: _client_offset + CLIENTS_PER_BATCH]
 
-    # If we're near the end of the list, wrap around to fill the batch
-    if len(batch) < CLIENTS_PER_BATCH:
+    if len(batch) < CLIENTS_PER_BATCH and total > len(batch):
         batch += all_configs[: CLIENTS_PER_BATCH - len(batch)]
+    
+    # Final safety: Ensure no duplicate client IDs in the SAME batch
+    unique_batch = []
+    seen_ids = set()
+    for c in batch:
+        if c["id"] not in seen_ids:
+            unique_batch.append(c)
+            seen_ids.add(c["id"])
+    batch = unique_batch
 
     log(
         "scheduler", "batch_started",
@@ -134,9 +142,14 @@ async def run_ingestion_batch():
         clients=[c["client_id"] for c in batch]
     )
 
-    # Process the batch concurrently (up to 10 simultaneous Sheet reads)
-    # Using return_exceptions=True to ensure one failure doesn't stop the whole batch
-    await asyncio.gather(*[process_client(conf) for conf in batch], return_exceptions=True)
+    # Process batch with slight sequential jitter to further spread load
+    tasks = []
+    import random
+    for conf in batch:
+        tasks.append(process_client(conf))
+        await asyncio.sleep(random.uniform(1.0, 3.0)) # Staggered launch
+
+    await asyncio.gather(*tasks, return_exceptions=True)
 
     _client_offset += CLIENTS_PER_BATCH
     log("scheduler", "batch_finished", next_offset=_client_offset % total)
@@ -166,4 +179,5 @@ if __name__ == "__main__":
     except (KeyboardInterrupt, SystemExit):
         pass
     except Exception as fatal:
-        logging.error(f"FATAL WORKER ERROR: {fatal}")
+        log("worker", "fatal_crash", error=str(fatal))
+

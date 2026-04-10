@@ -1,12 +1,14 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useCallback } from 'react';
 import {
   ListFilter, RefreshCw, Loader2, FileText,
   CheckCircle2, XCircle, AlertTriangle, Copy, 
   Search, Calendar, ChevronDown, MessageSquare
 } from 'lucide-react';
 import { fetchLogs, fetchConfigs, type IngestionLog, type SourceConfig } from '../lib/api';
+import { ToastContainer } from './Toast';
+import { useToast } from '../hooks/useToast';
 
-const STATUS_VARIANTS: Record<string, { bg: string, text: string, icon: any }> = {
+const STATUS_VARIANTS: Record<string, { bg: string, text: string, icon: React.ElementType }> = {
   inserted: { bg: 'bg-emerald-500/10', text: 'text-emerald-600', icon: CheckCircle2 },
   duplicate: { bg: 'bg-amber-500/10', text: 'text-amber-600', icon: Copy },
   error: { bg: 'bg-red-500/10', text: 'text-red-600', icon: XCircle },
@@ -28,6 +30,7 @@ const LogViewer: React.FC<LogViewerProps> = ({ initialClientId, onClearFilter })
   const [logs, setLogs] = useState<IngestionLog[]>([]);
   const [clients, setClients] = useState<SourceConfig[]>([]);
   const [loading, setLoading] = useState(true);
+  const { toasts, addToast, dismissToast } = useToast();
 
   // Filters
   const [filterClient, setFilterClient] = useState(initialClientId || '');
@@ -39,7 +42,7 @@ const LogViewer: React.FC<LogViewerProps> = ({ initialClientId, onClearFilter })
     if (initialClientId) setFilterClient(initialClientId);
   }, [initialClientId]);
 
-  const load = async () => {
+  const load = useCallback(async () => {
     setLoading(true);
     try {
       const params: Record<string, string | number> = { limit };
@@ -53,14 +56,15 @@ const LogViewer: React.FC<LogViewerProps> = ({ initialClientId, onClearFilter })
       ]);
       setLogs(logsData);
       if (!clients.length) setClients(clientsData);
-    } catch (e) {
-      console.error('Failed to load logs', e);
+    } catch (e: unknown) {
+      const err = e instanceof Error ? e : new Error('Erro de rede');
+      addToast('error', 'Falha ao carregar logs', err.message);
     } finally {
       setLoading(false);
     }
-  };
+  }, [filterClient, filterStatus, filterWa, limit, clients, addToast]);
 
-  useEffect(() => { load(); }, [filterClient, filterStatus, filterWa, limit]);
+  useEffect(() => { load(); }, [load]);
 
   const formatDate = (iso: string) => {
     const d = new Date(iso);
@@ -254,6 +258,7 @@ const LogViewer: React.FC<LogViewerProps> = ({ initialClientId, onClearFilter })
           </div>
         </div>
       )}
+      <ToastContainer toasts={toasts} onDismiss={dismissToast} />
     </div>
   );
 };

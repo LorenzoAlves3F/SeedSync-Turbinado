@@ -1,15 +1,15 @@
-import httpx
 import hashlib
 import json
 import asyncio
 from datetime import datetime, timezone
-from typing import Any, Optional
-from ..config import SUPABASE_URL, SUPABASE_HEADERS, DRY_RUN, NOTIFY_OVERRIDE_PHONE
+from typing import Any
+from ..config import SUPABASE_URL, SUPABASE_HEADERS, DRY_RUN, NOTIFY_OVERRIDE_LIST
 from ..phone import normalizer
 from ..integrations.whatsapp import whatsapp
 from ..integrations.clickup import create_failure_task
 from ..http_client import http_client
 from ..audit import log
+from .validator import sanitize_identifier
 
 
 class LeadIngester:
@@ -28,18 +28,18 @@ class LeadIngester:
         if not rows: return 0
 
         # 1. Generate fingerprints for the batch (Hardened Fuzzy Matching)
+        # get_fuzzy is defined ONCE outside the loop for correct closure & performance
+        def get_fuzzy(target: str, row: dict) -> str:
+            for k in row.keys():
+                if str(target).lower() == str(k).lower().strip():
+                    return row[k]
+            return ""
+
         row_data = []
         for row in rows:
-            # Fuzzy find columns to avoid empty fingerprints if case differs
-            def get_fuzzy(target):
-                for k in row.keys():
-                    if str(target).lower() == str(k).lower().strip():
-                        return row[k]
-                return ""
-
             # Build identity string from cleaned data
-            name = str(get_fuzzy("NOME")).strip().lower()
-            phone = str(get_fuzzy("WHATSAPP")).strip().lower()
+            name = str(get_fuzzy("NOME", row)).strip().lower()
+            phone = str(get_fuzzy("WHATSAPP", row)).strip().lower()
             
             # If both are empty, use a full row hash as safety fallback
             if not name and not phone:
@@ -54,6 +54,11 @@ class LeadIngester:
         all_fps = [rd["fp"] for rd in row_data]
         existing_fps = await self._check_duplicates_bulk(all_fps)
         
+        # FAIL-SAFE: If duplicate check fails (returns None), abort batch to prevent re-processing
+        if existing_fps is None:
+            log("ingester", "batch_aborted_safety", client=self.client_id, reason="duplication_check_failed")
+            return 0
+
         new_leads = [rd for rd in row_data if rd["fp"] not in existing_fps]
         if not new_leads:
             log("ingester", "batch_all_duplicates", client=self.client_id, count=len(rows))
@@ -64,17 +69,25 @@ class LeadIngester:
         # 3. Batch DB Insert (into client table)
         if not DRY_RUN:
             try:
+                # Sanitize all row keys to match DB schema (e.g. 'Atendido?' -> 'atendido')
+                sanitized_leads = []
+                for rd in new_leads:
+                    sanitized_leads.append({sanitize_identifier(k): v for k, v in rd["row"].items() if k})
+
                 ins_res = await http_client.post(
                     f"{SUPABASE_URL}/rest/v1/{self.target_table}",
                     headers=SUPABASE_HEADERS,
-                    json=[rd["row"] for rd in new_leads]
+                    json=sanitized_leads
                 )
                 if not ins_res.is_success:
                     log("ingester", "batch_insert_failed", client=self.client_id, error=ins_res.text[:200])
-                    return 0
+                    # RAISE: This stops the scheduler from advancing the last_row_index
+                    raise Exception(f"Database insertion failed: {ins_res.text[:100]}")
             except Exception as e:
+                if "Database insertion failed" in str(e):
+                    raise e
                 log("ingester", "batch_insert_exception", client=self.client_id, error=str(e))
-                return 0
+                raise Exception(f"Ingestion failed: {type(e).__name__}")
 
         # 4. Concurrent Notifications & Individual Logging
         # We process notifications concurrently to speed up but still record individual results
@@ -93,19 +106,18 @@ class LeadIngester:
         await self._log_ingestion(row, fingerprint, "inserted", notify_status)
         return "inserted"
 
-    async def _check_duplicates_bulk(self, fingerprints: list[str]) -> set[str]:
-        """Check which fingerprints already exist in chunks."""
+    async def _check_duplicates_bulk(self, fingerprints: list[str]) -> set[str] | None:
+        """Check which fingerprints already exist. Returns None on error to trigger fail-safe."""
         try:
             existing = set()
             chunk_size = 50
-            # Ensure we use the correct schema header
-            headers = {**SUPABASE_HEADERS, "Accept-Profile": "seed_sync"}
+            headers = {**SUPABASE_HEADERS} # Uses default public schema
             
             for i in range(0, len(fingerprints), chunk_size):
                 chunk = fingerprints[i:i + chunk_size]
                 fp_filter = ",".join(chunk)
                 r = await http_client.get(
-                    f"{SUPABASE_URL}/rest/v1/ingestion_logs",
+                    f"{SUPABASE_URL}/rest/v1/ingestion_log",
                     headers=headers,
                     params={
                         "row_fingerprint": f"in.({fp_filter})",
@@ -115,10 +127,13 @@ class LeadIngester:
                 )
                 if r.is_success:
                     existing.update(item["row_fingerprint"] for item in r.json())
+                else:
+                    log("ingester", "bulk_check_http_error", error=r.text[:200])
+                    return None
             return existing
         except Exception as e:
-            log("ingester", "bulk_check_failed", error=str(e))
-            return set()
+            log("ingester", "bulk_check_failed", error=str(e) or type(e).__name__)
+            return None
 
     async def _notify(self, row: dict[str, Any]) -> str:
         """Async notification logic. Modified for Pilot Test Override."""
@@ -150,9 +165,12 @@ class LeadIngester:
         msg += "\n-------------------------\nEnvie uma mensagem agora para o cliente! ⚡"
 
         # ── DESTINATION RESOLUTION ──
-        dests = self.config.get("destination_phones", [])
-        if not dests and self.config.get("legacy_phone"):
-            dests = [self.config.get("legacy_phone")]
+        if NOTIFY_OVERRIDE_LIST:
+            dests = NOTIFY_OVERRIDE_LIST
+        else:
+            dests = self.config.get("destination_phones", [])
+            if not dests and self.config.get("legacy_phone"):
+                dests = [self.config.get("legacy_phone")]
             
         if not dests:
             log("ingester", "no_destinations_configured", client=self.client_id)
@@ -196,8 +214,10 @@ class LeadIngester:
                 "whatsapp_status": whatsapp_status,
                 "processed_at": datetime.now(timezone.utc).isoformat()
             }
-            # Add schema header
-            headers = {**SUPABASE_HEADERS, "Accept-Profile": "seed_sync"}
-            await http_client.post(f"{SUPABASE_URL}/rest/v1/ingestion_logs", headers=headers, json=log_entry)
-        except:
-            pass
+            # Async write using standard public profile
+            headers = {**SUPABASE_HEADERS}
+            r = await http_client.post(f"{SUPABASE_URL}/rest/v1/ingestion_log", headers=headers, json=log_entry)
+            if not r.is_success:
+                log("ingester", "log_write_failed", client=self.client_id, error=r.text[:200])
+        except Exception as e:
+            log("ingester", "log_write_exception", client=self.client_id, error=str(e))

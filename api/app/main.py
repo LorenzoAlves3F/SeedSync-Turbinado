@@ -1,21 +1,36 @@
+import os
+import re
+from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import List, Optional
 import httpx
-import re
 from .config import SUPABASE_URL, SUPABASE_HEADERS
 from .utils.sheets_utils import list_worksheets, get_sheet_columns
 
-app = FastAPI(title="Seed Sync API")
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Startup validation
+    if not SUPABASE_URL or not SUPABASE_URL.startswith("http"):
+        print("❌ CRITICAL: SUPABASE_URL is missing or invalid!")
+    if not SUPABASE_HEADERS.get("apikey"):
+        print("❌ CRITICAL: SUPABASE_SERVICE_ROLE_KEY is missing!")
+    yield
+
+app = FastAPI(title="Seed Sync API", lifespan=lifespan)
+
+# Allowed origins from env or default to all for local dev
+origins = os.getenv("CORS_ORIGINS", "*").split(",")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
 
 # Global client for connection pooling
 http_client = httpx.AsyncClient(limits=httpx.Limits(max_connections=50, max_keepalive_connections=20), timeout=20.0)
@@ -109,7 +124,7 @@ async def create_config(config: ClientConfig):
     r = await http_client.post(
         f"{SUPABASE_URL}/rest/v1/source_configs",
         headers=SUPABASE_HEADERS,
-        json=config.dict(),
+        json=config.model_dump(),
     )
     if not r.is_success:
         raise HTTPException(status_code=r.status_code, detail=r.text)
@@ -118,7 +133,7 @@ async def create_config(config: ClientConfig):
 
 @app.patch("/configs/{client_id}")
 async def update_config(client_id: str, patch: ClientConfigPatch):
-    payload = patch.dict(exclude_none=True)
+    payload = patch.model_dump(exclude_none=True)
     if not payload:
         raise HTTPException(status_code=400, detail="No fields to update")
 
@@ -173,15 +188,6 @@ async def get_logs(
         params=params,
     )
     if not r.is_success:
-        # Fallback for alternative table naming
-        headers = {**SUPABASE_HEADERS, "Accept-Profile": "seed_sync"}
-        r = await http_client.get(
-            f"{SUPABASE_URL}/rest/v1/ingestion_log",
-            headers=headers,
-            params=params,
-        )
-    
-    if not r.is_success:
         raise HTTPException(status_code=r.status_code, detail=r.text)
     return r.json()
 
@@ -191,7 +197,6 @@ async def get_logs(
 @app.post("/configs/sync-reset")
 async def reset_all_cursors():
     """Safety Protocol: Roll back all active cursors by 50 rows to force a re-scan."""
-    # 1. Fetch all active configs
     r = await http_client.get(
         f"{SUPABASE_URL}/rest/v1/source_configs",
         headers=SUPABASE_HEADERS,
@@ -203,7 +208,6 @@ async def reset_all_cursors():
     configs = r.json()
     count = 0
     
-    # 2. Update each cursor (Rollback by 50)
     for conf in configs:
         old_idx = conf.get("last_row_index", 0)
         new_idx = max(0, old_idx - 50)
@@ -217,6 +221,25 @@ async def reset_all_cursors():
         count += 1
         
     return {"status": "reset_initiated", "cluster_size": count, "buffer_size": 50}
+
+
+# ──────────────────── Configs by ID ────────────────────
+
+@app.get("/configs/{client_id}")
+async def get_config(client_id: str):
+    r = await http_client.get(
+        f"{SUPABASE_URL}/rest/v1/source_configs",
+        headers=SUPABASE_HEADERS,
+        params={"client_id": f"eq.{client_id}", "limit": "1"},
+    )
+    if not r.is_success:
+        raise HTTPException(status_code=r.status_code, detail=r.text)
+    data = r.json()
+    if not data:
+        raise HTTPException(status_code=404, detail="Client not found")
+    return data[0]
+
+
 
 
 # ──────────────────── Sheets Exploration ────────────────────

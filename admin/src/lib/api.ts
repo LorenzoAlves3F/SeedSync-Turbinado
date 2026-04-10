@@ -1,8 +1,20 @@
-import axios from 'axios';
+import axios, { AxiosError } from 'axios';
 
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
 
 const api = axios.create({ baseURL: API_URL });
+
+// Global error interceptor — converts network/HTTP errors to readable messages
+api.interceptors.response.use(
+  (res) => res,
+  (err: AxiosError<{ detail?: string }>) => {
+    const detail = err.response?.data?.detail;
+    const message = detail
+      ? String(detail)
+      : err.message || 'Unknown network error';
+    return Promise.reject(new Error(message));
+  }
+);
 
 // ─── Types ───────────────────────────────────────────────
 
@@ -58,6 +70,12 @@ export const updateConfig = (clientId: string, data: Partial<SourceConfig>) =>
 
 export const deleteConfig = (clientId: string) =>
   api.delete(`/configs/${clientId}`).then(r => r.data);
+
+// ─── Bulk Operations ─────────────────────────────────────
+
+export const syncReset = () =>
+  api.post<{ status: string; cluster_size: number; buffer_size: number }>('/configs/sync-reset')
+    .then(r => r.data);
 
 // ─── Logs ────────────────────────────────────────────────
 
