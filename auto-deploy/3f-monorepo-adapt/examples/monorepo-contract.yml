@@ -1,0 +1,26 @@
+# Exemplo de Contrato para App dentro de Monorepo (pnpm + turbo)
+
+```yaml
+# Este arquivo reside em: /ops/admin-dashboard.yml 
+# (ou na raiz, dependendo de como voce configurou seu orquestrador para ler múltiplos contratos)
+
+kind: frontend
+runtime: node
+
+# O comando de install sempre na raiz do monorepo
+install_cmd: pnpm install
+
+# O build usa o filtro para nao buildar o monorepo inteiro e economizar RAM na VPS
+build_cmd: pnpm --filter "@3f/admin-dashboard" build
+
+# O start garante que o PM2 chame o comando certo dentro da pasta do app
+# --host é obrigatório para o Nginx conseguir encaminhar o tráfego
+start_cmd: pnpm --filter "@3f/admin-dashboard" preview --host --port 5005
+
+pm2_name: 3f-admin-dashboard
+port: 5005
+requires_nginx: true
+domains:
+  - admin.3fventure.tech
+healthcheck: /
+```

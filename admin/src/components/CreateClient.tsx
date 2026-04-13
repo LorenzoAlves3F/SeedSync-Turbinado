@@ -293,17 +293,15 @@ const CreateClient: React.FC<CreateClientProps> = ({ initialConfig, onSuccess })
                      <div className="w-14 h-14 bg-white/5 rounded-2xl flex items-center justify-center text-emerald-500 shrink-0 border border-white/5 shadow-inner">
                         <ShieldCheck size={28} />
                      </div>
-                     <div>
-                        <h4 className="text-lg font-black text-white tracking-tight">Security Handshake</h4>
-                        <p className="text-slate-400 text-sm font-medium mt-1">Add this robot ID to the archive's Share panel to grant ingestion access:</p>
-                        <div className="mt-4 flex items-center gap-4">
-                           <code className="bg-white/5 border border-white/10 p-4 rounded-2xl text-emerald-400 font-mono text-xs select-all cursor-pointer hover:bg-white/10 transition-colors w-full md:w-auto">
-                             seedsync@seedsync-491513.iam.gserviceaccount.com
-                           </code>
-                           <button className="hidden md:flex items-center gap-2 text-[10px] font-black text-slate-500 uppercase tracking-widest hover:text-white transition-colors">
-                             <Fingerprint size={14} /> Verify
-                           </button>
-                        </div>
+                     <div className="flex-1">
+                        <h4 className="text-lg font-black text-white tracking-tight">Before continuing — share the sheet</h4>
+                        <p className="text-slate-400 text-sm font-medium mt-1 mb-5">
+                          Open the Google Sheet, click <span className="text-white font-bold">Share</span>, and add this email as <span className="text-white font-bold">Viewer</span>:
+                        </p>
+                        <code className="block bg-white/5 border border-white/10 p-4 rounded-2xl text-emerald-400 font-mono text-xs select-all cursor-pointer hover:bg-white/10 transition-colors">
+                          seedsync@seedsync-491513.iam.gserviceaccount.com
+                        </code>
+                        <p className="text-slate-600 text-[10px] font-bold uppercase tracking-widest mt-5">Connection will fail if this step is skipped.</p>
                      </div>
                   </div>
                </div>

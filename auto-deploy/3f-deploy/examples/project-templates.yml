@@ -1,0 +1,43 @@
+# Exemplo de Contrato para Frontend (Vite)
+kind: frontend
+runtime: node
+install_cmd: pnpm install
+build_cmd: pnpm build
+start_cmd: pnpm preview --host --port 3000
+pm2_name: app-frontend-vps
+port: 3000
+requires_nginx: true
+domains:
+  - app.3fventure.tech
+healthcheck: /
+
+---
+
+# Exemplo de Contrato para Backend (Node/Express)
+kind: backend
+runtime: node
+install_cmd: pnpm install
+build_cmd: "" # backends as vezes nao precisam de build
+start_cmd: node dist/index.js
+pm2_name: app-api-vps
+port: 4000
+requires_nginx: true
+domains:
+  - api.app.3fventure.tech
+healthcheck: /health
+
+---
+
+# Exemplo de Contrato para Backend Python (FastAPI/Flask)
+kind: backend
+runtime: python
+install_cmd: "python3 -m venv venv && ./venv/bin/pip install -r requirements.txt"
+build_cmd: "" 
+# Usamos o binário do venv para garantir isolamento
+start_cmd: "./venv/bin/gunicorn app.main:app --workers 4 --worker-class uvicorn.workers.UvicornWorker --bind 0.0.0.0:8000"
+pm2_name: app-python-api
+port: 8000
+requires_nginx: true
+domains:
+  - python-api.3fventure.tech
+healthcheck: /docs

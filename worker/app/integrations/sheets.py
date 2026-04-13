@@ -1,8 +1,9 @@
 import gspread
 import asyncio
+import json
 from google.oauth2.service_account import Credentials
 from typing import Any
-from ..config import GOOGLE_SERVICE_ACCOUNT_PATH
+from ..config import GOOGLE_SERVICE_ACCOUNT_PATH, GOOGLE_SERVICE_ACCOUNT_JSON
 from ..audit import log
 
 SCOPES = ["https://www.googleapis.com/auth/spreadsheets.readonly"]
@@ -14,7 +15,11 @@ _client: gspread.Client | None = None
 def _get_client() -> gspread.Client:
     global _client
     if _client is None:
-        creds = Credentials.from_service_account_file(GOOGLE_SERVICE_ACCOUNT_PATH, scopes=SCOPES)
+        if GOOGLE_SERVICE_ACCOUNT_JSON:
+            info = json.loads(GOOGLE_SERVICE_ACCOUNT_JSON)
+            creds = Credentials.from_service_account_info(info, scopes=SCOPES)
+        else:
+            creds = Credentials.from_service_account_file(GOOGLE_SERVICE_ACCOUNT_PATH, scopes=SCOPES)
         _client = gspread.authorize(creds)
     return _client
 

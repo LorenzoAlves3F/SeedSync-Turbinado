@@ -1,0 +1,9 @@
+kind: backend
+runtime: python
+install_cmd: "python3 -m venv venv && ./venv/bin/pip install -r requirements.txt"
+build_cmd: ""
+start_cmd: "./venv/bin/python -m app.main"
+pm2_name: seedsync-worker
+port: 9000
+requires_nginx: false
+healthcheck: /

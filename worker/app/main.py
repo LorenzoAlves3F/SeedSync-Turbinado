@@ -1,6 +1,9 @@
 import asyncio
 import logging
+import os
 import random
+import threading
+from http.server import BaseHTTPRequestHandler, HTTPServer
 from typing import Dict, Any
 from .config import POLL_INTERVAL_SECONDS, SUPABASE_URL, SUPABASE_HEADERS, DRY_RUN
 from .audit import log
@@ -166,7 +169,27 @@ async def run_ingestion_batch():
     log("scheduler", "batch_finished", next_offset=_client_offset % total)
 
 
+def _start_health_server():
+    """Start a minimal HTTP server for orchestrator health checks (background thread)."""
+    port = int(os.getenv("WORKER_HEALTH_PORT", "9000"))
+
+    class _Handler(BaseHTTPRequestHandler):
+        def do_GET(self):
+            self.send_response(200)
+            self.end_headers()
+            self.wfile.write(b"ok")
+
+        def log_message(self, *_):
+            pass  # Silence access logs
+
+    server = HTTPServer(("0.0.0.0", port), _Handler)
+    log("worker", "health_server_started", port=port)
+    server.serve_forever()
+
+
 async def main():
+    threading.Thread(target=_start_health_server, daemon=True).start()
+
     log(
         "worker", "started",
         interval=POLL_INTERVAL_SECONDS,

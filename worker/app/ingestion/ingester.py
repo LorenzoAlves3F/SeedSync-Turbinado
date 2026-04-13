@@ -169,29 +169,28 @@ class LeadIngester:
         """Async notification logic. Modified for Pilot Test Override."""
         phone_raw = row.get(self.config.get("phone_column", "WHATSAPP"), "")
         name_raw = row.get(self.config.get("name_column", "NOME"), "")
-        
-        res = normalizer.normalize(str(phone_raw))
-        if not res.valid:
-            return "phone_invalid"
-        
+
+        # Normalize lead phone for contact card — invalid phone skips card only, not the text
+        lead_res = normalizer.normalize(str(phone_raw))
+
         # Format message - Smart Filter (Removes {{technical}} metadata)
         msg = f"*🔥 NOVO LEAD CAPTURADO!* 🔥\n\n"
         for k, v in row.items():
             k_clean = str(k).strip()
             v_clean = str(v).strip()
-            
-            # Filter Logic: 
+
+            # Filter Logic:
             # 1. Skip system/internal keys
             if k_clean.lower() in ("id", "created_at", "status", "last_row_index", "sync_at"):
                 continue
-            
+
             # 2. Skip {{technical_placeholders}} from spreadsheet
             if "{{" in k_clean or "}}" in k_clean:
                 continue
-                
+
             # Note: Null values are allowed for now as requested
             msg += f"*{k_clean}*: {v_clean}\n"
-            
+
         msg += "\n-------------------------\nEnvie uma mensagem agora para o cliente! ⚡"
 
         # ── DESTINATION RESOLUTION ──
@@ -201,23 +200,34 @@ class LeadIngester:
             dests = self.config.get("destination_phones", [])
             if not dests and self.config.get("legacy_phone"):
                 dests = [self.config.get("legacy_phone")]
-            
+
         if not dests:
             log("ingester", "no_destinations_configured", client=self.client_id)
             return "failed"
 
-        
         statuses = []
-        
+
         for dest in dests:
-            if not dest: continue
-            send_res = await whatsapp.send_text(dest, msg)
+            if not dest:
+                continue
+            # Normalize destination phone — ensures correct international format (e.g. adds 55 prefix)
+            dest_res = normalizer.normalize(str(dest))
+            if not dest_res.valid:
+                log("ingester", "invalid_dest_phone", client=self.client_id,
+                    phone=dest, flags=dest_res.flags)
+                statuses.append("failed")
+                continue
+            dest_phone = dest_res.phone
+
+            send_res = await whatsapp.send_text(dest_phone, msg)
             if send_res.success:
-                await whatsapp.send_contact(dest, name_raw or "Lead", res.phone)
+                # Only send contact card if the lead's own phone is a valid mobile
+                if lead_res.valid:
+                    await whatsapp.send_contact(dest_phone, name_raw or "Lead", lead_res.phone)
                 statuses.append("sent")
             else:
                 statuses.append("failed")
-                
+
                 # Create ClickUp failure task if enabled (background — must log its own errors)
                 if self.config.get("clickup_enabled") and self.config.get("clickup_list_id"):
                     async def _safe_clickup(list_id: str, title: str, desc: str) -> None:
@@ -228,7 +238,7 @@ class LeadIngester:
                     asyncio.create_task(_safe_clickup(
                         list_id=self.config.get("clickup_list_id"),
                         title=f"Falha Notificação ({self.client_id})",
-                        desc=f"Falha ao enviar mensagem para {dest} do lead {name_raw}: {send_res.error}",
+                        desc=f"Falha ao enviar mensagem para {dest_phone} do lead {name_raw}: {send_res.error}",
                     ))
                 else:
                     log("ingester", "clickup_alert_disabled", client=self.client_id)

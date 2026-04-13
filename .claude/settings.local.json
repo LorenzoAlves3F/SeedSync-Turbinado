@@ -1,0 +1,23 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(grep -n \"except:\" /c/Users/Lorenzo/Desktop/SeedSync/SeedSync/worker/app/**/*.py)",
+      "Bash(wc -l /c/Users/Lorenzo/Desktop/SeedSync/SeedSync/worker/app/*.py /c/Users/Lorenzo/Desktop/SeedSync/SeedSync/worker/app/*/*.py)",
+      "Bash(grep -n '\"\"\"' /c/Users/Lorenzo/Desktop/SeedSync/SeedSync/worker/app/**/*.py)",
+      "Bash(grep:*)",
+      "Bash(xargs wc:*)",
+      "Bash(venv/Scripts/python -m pytest tests/ -v)",
+      "Bash(venv/Scripts/python scripts/pilot_bvk.py)",
+      "Bash(venv/Scripts/python -X utf8 scripts/pilot_bvk.py)",
+      "Bash(venv/Scripts/python -X utf8 scripts/pilot_bvk.py --peek)",
+      "Bash(venv/Scripts/python -m pytest tests/ -q)",
+      "Bash(python3:*)",
+      "Bash(venv/Scripts/python -c ':*)",
+      "Bash(ls C:/Users/Lorenzo/Desktop/SeedSync/SeedSync/admin/.env*)",
+      "Bash(read -r)",
+      "Bash(venv/Scripts/python scripts/set_pilot_mode.py)",
+      "Bash(venv/Scripts/python -c \"import ast; ast.parse\\(open\\('app/ingestion/ingester.py', encoding='utf-8'\\).read\\(\\)\\); print\\('OK'\\)\")",
+      "Bash(venv/Scripts/python -m pytest tests/ -v --tb=short)"
+    ]
+  }
+}
