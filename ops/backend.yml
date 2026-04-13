@@ -1,0 +1,11 @@
+kind: backend
+runtime: python
+install_cmd: "python3 -m venv api/venv && ./api/venv/bin/pip install -r api/requirements.txt && python3 -m venv worker/venv && ./worker/venv/bin/pip install -r worker/requirements.txt"
+build_cmd: ""
+start_cmd: "bash scripts/start_backend.sh"
+pm2_name: seedsync-backend
+port: 8000
+requires_nginx: true
+domains:
+  - api-seedsync.3fventure.tech
+healthcheck: /health

@@ -1,8 +1,13 @@
 import os
 from dotenv import load_dotenv
 
-env_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), ".env")
-load_dotenv(dotenv_path=env_path)
+# Env resolution order (first found wins):
+#   1. worker/.env   — Orchestrator with app_path=worker/ (or local dev)
+#   2. root .env     — Orchestrator with app_path='' (combined backend project)
+_worker_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+_worker_env = os.path.join(_worker_dir, ".env")
+_root_env   = os.path.join(os.path.dirname(_worker_dir), ".env")
+load_dotenv(dotenv_path=_worker_env if os.path.exists(_worker_env) else _root_env)
 
 SUPABASE_URL = os.getenv("SUPABASE_URL", "").strip()
 SUPABASE_SERVICE_ROLE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY", "").strip()
