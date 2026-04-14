@@ -7,7 +7,7 @@ from dotenv import load_dotenv
 _worker_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 _worker_env = os.path.join(_worker_dir, ".env")
 _root_env   = os.path.join(os.path.dirname(_worker_dir), ".env")
-load_dotenv(dotenv_path=_worker_env if os.path.exists(_worker_env) else _root_env)
+load_dotenv(dotenv_path=_worker_env if os.path.exists(_worker_env) else _root_env, override=True)
 
 SUPABASE_URL = os.getenv("SUPABASE_URL", "").strip()
 SUPABASE_SERVICE_ROLE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY", "").strip()
