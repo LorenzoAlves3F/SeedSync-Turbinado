@@ -2,7 +2,7 @@ kind: backend
 runtime: python
 install_cmd: "python3 -m venv venv && ./venv/bin/pip install -r requirements.txt"
 build_cmd: ""
-start_cmd: "bash scripts/start_backend.sh"
+start_cmd: "./venv/bin/python run.py"
 pm2_name: seedsync-backend
 port: 8000
 requires_nginx: true
