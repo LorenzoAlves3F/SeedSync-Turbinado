@@ -1,8 +1,8 @@
 kind: frontend
 runtime: node
-install_cmd: npm install
-build_cmd: npm run build
-start_cmd: npm run preview
+install_cmd: "cd admin && npm install"
+build_cmd: "cd admin && npm run build"
+start_cmd: "cd admin && npm run preview"
 pm2_name: seedsync-admin
 port: 4000
 requires_nginx: true
