@@ -16,8 +16,13 @@ def _get_client() -> gspread.Client:
     global _client
     if _client is None:
         if GOOGLE_SERVICE_ACCOUNT_JSON:
-            info = json.loads(GOOGLE_SERVICE_ACCOUNT_JSON)
-            creds = Credentials.from_service_account_info(info, scopes=SCOPES)
+            try:
+                info = json.loads(GOOGLE_SERVICE_ACCOUNT_JSON)
+                creds = Credentials.from_service_account_info(info, scopes=SCOPES)
+            except (json.JSONDecodeError, ValueError):
+                # JSON env var was truncated/corrupted by deploy orchestrator — fall back to file
+                log("sheets", "json_env_corrupted_using_file", path=GOOGLE_SERVICE_ACCOUNT_PATH)
+                creds = Credentials.from_service_account_file(GOOGLE_SERVICE_ACCOUNT_PATH, scopes=SCOPES)
         else:
             creds = Credentials.from_service_account_file(GOOGLE_SERVICE_ACCOUNT_PATH, scopes=SCOPES)
         _client = gspread.authorize(creds)

@@ -223,6 +223,7 @@ async def run_ingestion_batch():
 
 def _start_health_server():
     """Start a minimal HTTP server for orchestrator health checks (background thread)."""
+    import time as _time
     port = int(os.getenv("WORKER_HEALTH_PORT", "9000"))
 
     class _Handler(BaseHTTPRequestHandler):
@@ -234,12 +235,21 @@ def _start_health_server():
         def log_message(self, *_):
             pass  # Silence access logs
 
-    server = HTTPServer(("0.0.0.0", port), _Handler, bind_and_activate=False)
-    server.allow_reuse_address = True
-    server.server_bind()
-    server.server_activate()
-    log("worker", "health_server_started", port=port)
-    server.serve_forever()
+    # Retry loop: previous process may still hold the port during a fast PM2 restart
+    for attempt in range(15):
+        try:
+            server = HTTPServer(("0.0.0.0", port), _Handler, bind_and_activate=False)
+            server.allow_reuse_address = True
+            server.server_bind()
+            server.server_activate()
+            log("worker", "health_server_started", port=port)
+            server.serve_forever()
+            return
+        except OSError:
+            if attempt < 14:
+                _time.sleep(2)
+
+    log("worker", "health_server_failed", port=port)
 
 
 async def main():
