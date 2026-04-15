@@ -17,18 +17,18 @@ SUPABASE_SERVICE_ROLE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY", "").strip()
 GOOGLE_SERVICE_ACCOUNT_JSON = os.getenv("GOOGLE_SERVICE_ACCOUNT_JSON", "").strip()
 
 GOOGLE_SERVICE_ACCOUNT_PATH = os.getenv("GOOGLE_SERVICE_ACCOUNT_PATH", "").strip()
-if not GOOGLE_SERVICE_ACCOUNT_JSON:
-    if not GOOGLE_SERVICE_ACCOUNT_PATH or not os.path.isabs(GOOGLE_SERVICE_ACCOUNT_PATH):
-        # If path is relative or missing, resolve relative to the worker root
-        base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-        fallback_path = os.path.join(base_dir, "google-service-account.json")
+# Always resolve the path so it can be used as fallback when JSON env var is truncated
+if not GOOGLE_SERVICE_ACCOUNT_PATH or not os.path.isabs(GOOGLE_SERVICE_ACCOUNT_PATH):
+    # If path is relative or missing, resolve relative to the worker root
+    base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    fallback_path = os.path.join(base_dir, "google-service-account.json")
 
-        if GOOGLE_SERVICE_ACCOUNT_PATH:
-            GOOGLE_SERVICE_ACCOUNT_PATH = os.path.abspath(os.path.join(base_dir, GOOGLE_SERVICE_ACCOUNT_PATH))
-        else:
-            GOOGLE_SERVICE_ACCOUNT_PATH = fallback_path
+    if GOOGLE_SERVICE_ACCOUNT_PATH:
+        GOOGLE_SERVICE_ACCOUNT_PATH = os.path.abspath(os.path.join(base_dir, GOOGLE_SERVICE_ACCOUNT_PATH))
+    else:
+        GOOGLE_SERVICE_ACCOUNT_PATH = fallback_path
 
-    GOOGLE_SERVICE_ACCOUNT_PATH = GOOGLE_SERVICE_ACCOUNT_PATH.replace("\\", "/")
+GOOGLE_SERVICE_ACCOUNT_PATH = GOOGLE_SERVICE_ACCOUNT_PATH.replace("\\", "/")
 
 ZAPI_INSTANCE_ID = os.getenv("ZAPI_INSTANCE_ID", "").strip()
 ZAPI_TOKEN = os.getenv("ZAPI_TOKEN", "").strip()
