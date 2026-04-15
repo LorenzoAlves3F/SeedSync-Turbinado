@@ -1,5 +1,6 @@
 import hashlib
 import json
+import re
 import asyncio
 from datetime import datetime, timezone
 from typing import Any
@@ -10,6 +11,7 @@ from ..integrations.clickup import create_failure_task
 from ..http_client import http_client
 from ..audit import log
 from .validator import sanitize_identifier
+from .schema_manager import reload_pgrst_schema
 
 
 DEDUP_CHUNK_SIZE = 50  # Max fingerprints per PostgREST IN() filter call
@@ -90,14 +92,9 @@ class LeadIngester:
                 for rd in new_leads:
                     sanitized_leads.append({sanitize_identifier(k): v for k, v in rd["row"].items() if k})
 
-                ins_res = await http_client.post(
-                    f"{SUPABASE_URL}/rest/v1/{self.target_table}",
-                    headers=SUPABASE_HEADERS,
-                    json=sanitized_leads
-                )
+                ins_res = await self._insert_with_schema_recovery(sanitized_leads)
                 if not ins_res.is_success:
                     log("ingester", "batch_insert_failed", client=self.client_id, error=ins_res.text[:ERROR_TEXT_MAX_LEN])
-                    # RAISE: This stops the scheduler from advancing the last_row_index
                     raise Exception(f"Database insertion failed: {ins_res.text[:100]}")
             except Exception as e:
                 if "Database insertion failed" in str(e):
@@ -135,6 +132,55 @@ class LeadIngester:
         await self._patch_log_whatsapp_status(fingerprint, notify_status)
 
         return "inserted"
+
+    async def _insert_with_schema_recovery(self, sanitized_leads: list[dict]):
+        """
+        POST the batch to Supabase with automatic PGRST204 recovery.
+
+        PGRST204 means PostgREST's in-memory schema cache doesn't know about a
+        column that exists in the database (e.g. added after PostgREST started).
+        When detected, the missing column is force-added via RPC and the schema
+        cache is reloaded, then the insert is retried. Loops until success or a
+        non-PGRST204 error — handles batches with multiple unknown columns.
+        """
+        _PGRST204_RE = re.compile(r"'(\w+)' column of '(\w+)'")
+        max_retries = 10
+
+        for attempt in range(max_retries):
+            res = await http_client.post(
+                f"{SUPABASE_URL}/rest/v1/{self.target_table}",
+                headers=SUPABASE_HEADERS,
+                json=sanitized_leads,
+            )
+            if res.is_success:
+                return res
+
+            error_text = res.text
+            if "PGRST204" not in error_text or attempt >= max_retries - 1:
+                return res  # Let caller handle the failure
+
+            # Parse the missing column and table from the error message
+            m = _PGRST204_RE.search(error_text)
+            if not m:
+                return res
+
+            col, table = m.group(1), sanitize_identifier(m.group(2))
+            log("ingester", "pgrst204_recovery", client=self.client_id,
+                column=col, table=table, attempt=attempt + 1)
+
+            # Force-add the column (IF NOT EXISTS — safe to call even if it exists)
+            add_res = await http_client.post(
+                f"{SUPABASE_URL}/rest/v1/rpc/add_missing_columns",
+                headers=SUPABASE_HEADERS,
+                json={"p_schema": "seed_sync", "p_table": table, "p_columns": [col]},
+            )
+            if not add_res.is_success:
+                log("ingester", "pgrst204_add_failed", client=self.client_id,
+                    column=col, error=add_res.text[:ERROR_TEXT_MAX_LEN])
+
+            await reload_pgrst_schema()
+
+        return res  # type: ignore[return-value]  # unreachable but satisfies type checker
 
     async def _check_duplicates_bulk(self, fingerprints: list[str]) -> set[str] | None:
         """Check which fingerprints already exist. Returns None on error to trigger fail-safe."""

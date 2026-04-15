@@ -5,6 +5,28 @@ from ..audit import log
 from .validator import sanitize_identifier
 
 
+async def reload_pgrst_schema() -> None:
+    """Signal PostgREST to reload its schema cache.
+
+    Must be called after any DDL change (ALTER TABLE, CREATE TABLE) so that
+    PostgREST's in-memory schema cache reflects the new columns immediately.
+    Requires the seed_sync.reload_pgrst_schema() SQL function to exist in Supabase:
+
+        CREATE OR REPLACE FUNCTION seed_sync.reload_pgrst_schema()
+        RETURNS void LANGUAGE sql SECURITY DEFINER AS $$
+          SELECT pg_notify('pgrst', 'reload schema');
+        $$;
+    """
+    try:
+        await http_client.post(
+            f"{SUPABASE_URL}/rest/v1/rpc/reload_pgrst_schema",
+            headers=SUPABASE_HEADERS,
+            json={},
+        )
+    except Exception:
+        pass  # Non-critical — PostgREST will reload on its next scheduled interval
+
+
 async def ensure_table_columns(table_name: str, sample_row: dict[str, Any]) -> bool:
     """
     Check if the target table exists and has all required columns.
@@ -40,6 +62,7 @@ async def ensure_table_columns(table_name: str, sample_row: dict[str, Any]) -> b
                 log("schema", "create_failed", table=safe_table, error=create_res.text[:200])
                 return False
             log("schema", "table_created", table=safe_table)
+            await reload_pgrst_schema()
             return True
 
         # Step 2: Sync columns
@@ -65,6 +88,7 @@ async def ensure_table_columns(table_name: str, sample_row: dict[str, Any]) -> b
                 log("schema", "alter_failed", table=safe_table, error=add_res.text[:200])
                 return False
             log("schema", "columns_added", table=safe_table, count=len(incoming_cols))
+            await reload_pgrst_schema()
 
         return True
 

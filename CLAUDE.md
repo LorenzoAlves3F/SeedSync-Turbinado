@@ -107,3 +107,57 @@ The admin frontend (`admin/src/lib/api.ts`) calls the FastAPI backend for all da
 **Phone normalization is Brazil-specific.** `phone/normalizer.py` encodes Brazilian DDD rules and the 9-digit mobile number requirement. Extending to other countries requires modifying this module.
 
 **The `DRY_RUN` env var** makes the worker log everything but skip actual DB writes and WhatsApp sends — useful for testing new client configs before going live.
+
+**PGRST204 auto-recovery** — when PostgREST's schema cache is stale (column exists in DB but not in cache), `ingester.py:_insert_with_schema_recovery` detects the error, force-adds the column via `add_missing_columns` RPC, reloads the cache via `reload_pgrst_schema` RPC, and retries. Handles up to 10 missing columns per batch.
+
+## Production Deployment
+
+### Infrastructure
+- **VPS**: `root@72.60.247.133` — Ubuntu, PM2 managed
+- **App root**: `/opt/apps/seedsync/`
+- **PM2 process**: `seedsync-backend` (runs `run.py` which spawns worker + api)
+- **Admin frontend**: separate PM2 process via Orchestrator
+- **Domain**: `seedsync.3fventure.tech`
+
+### Orchestrator (3F Deploy)
+Custom PM2 + Nginx + Certbot deployer. Contract files live in `ops/`:
+- `ops/backend.yml` — `start_cmd: "./venv/bin/python run.py"`, deploys worker+api as one process
+- `ops/admin.yml` — Vite preview server; all commands prefixed with `cd admin &&`
+
+**Known Orchestrator bug**: injects spaces or newlines into long env var values (JWTs, JSON blobs) every redeploy. `run.py:_repair_env()` auto-repairs the `.env` file on every startup before spawning subprocesses.
+
+### Google Service Account credentials
+The Orchestrator truncates `GOOGLE_SERVICE_ACCOUNT_JSON` to ~133 chars (unusable). Solution already deployed:
+- Full credentials file lives at `/opt/apps/seedsync/worker/google-service-account.json` (placed manually via `scp`, gitignored, survives redeploys)
+- `sheets.py` catches `JSONDecodeError` on the truncated env var and falls back to the file automatically
+
+### Required Supabase SQL functions
+These must exist in the Supabase project (run once in the SQL editor):
+
+```sql
+-- Lets the worker reload PostgREST's schema cache after adding columns
+CREATE OR REPLACE FUNCTION seed_sync.reload_pgrst_schema()
+RETURNS void LANGUAGE sql SECURITY DEFINER AS $$
+  SELECT pg_notify('pgrst', 'reload schema');
+$$;
+```
+
+All other schema RPCs (`check_table_seed_sync`, `create_table_with_defaults`, `get_table_columns`, `add_missing_columns`) should already exist.
+
+### Useful VPS commands
+```bash
+pm2 logs seedsync-backend --lines 40 --nostream   # view recent logs
+pm2 restart seedsync-backend                        # manual restart
+cat /opt/apps/seedsync/.env | grep SUPABASE        # verify env after deploy
+```
+
+### Active clients (source_configs table)
+| client_id | sheet | target_table |
+|---|---|---|
+| AGROLIVEIRA | Crédito Rural - 2026 | AGROLIVEIRA |
+| BVK | FORMS Licitações | BVK |
+| BVK_PREV | FORMS Prev | BVK_PREV |
+| RURALTECH | PRODUTORES - 2026 | RURALTECH |
+
+### Pilot testing
+Set `NOTIFY_OVERRIDE_PHONE=<your_number>` in Orchestrator secrets to redirect all WhatsApp notifications to a single number. Remove to go live.
