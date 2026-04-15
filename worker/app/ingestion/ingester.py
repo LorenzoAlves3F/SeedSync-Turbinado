@@ -159,20 +159,22 @@ class LeadIngester:
             if "PGRST204" not in error_text or attempt >= max_retries - 1:
                 return res  # Let caller handle the failure
 
-            # Parse the missing column and table from the error message
+            # Parse only the missing column name from the error message.
+            # Use self.target_table for the table name — preserves original case
+            # (e.g. "RURALTECH") so the RPC targets the correct Supabase table.
             m = _PGRST204_RE.search(error_text)
             if not m:
                 return res
 
-            col, table = m.group(1), sanitize_identifier(m.group(2))
+            col = m.group(1)
             log("ingester", "pgrst204_recovery", client=self.client_id,
-                column=col, table=table, attempt=attempt + 1)
+                column=col, table=self.target_table, attempt=attempt + 1)
 
             # Force-add the column (IF NOT EXISTS — safe to call even if it exists)
             add_res = await http_client.post(
                 f"{SUPABASE_URL}/rest/v1/rpc/add_missing_columns",
                 headers=SUPABASE_HEADERS,
-                json={"p_schema": "seed_sync", "p_table": table, "p_columns": [col]},
+                json={"p_schema": "seed_sync", "p_table": self.target_table, "p_columns": [col]},
             )
             if not add_res.is_success:
                 log("ingester", "pgrst204_add_failed", client=self.client_id,
