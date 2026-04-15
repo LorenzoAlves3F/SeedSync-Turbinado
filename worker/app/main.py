@@ -234,8 +234,10 @@ def _start_health_server():
         def log_message(self, *_):
             pass  # Silence access logs
 
-    server = HTTPServer(("0.0.0.0", port), _Handler)
+    server = HTTPServer(("0.0.0.0", port), _Handler, bind_and_activate=False)
     server.allow_reuse_address = True
+    server.server_bind()
+    server.server_activate()
     log("worker", "health_server_started", port=port)
     server.serve_forever()
 
