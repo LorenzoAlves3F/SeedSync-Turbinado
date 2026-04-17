@@ -4,7 +4,7 @@ import re
 import asyncio
 from datetime import datetime, timezone
 from typing import Any
-from ..config import SUPABASE_URL, SUPABASE_HEADERS, DRY_RUN, NOTIFY_OVERRIDE_LIST
+from ..config import SUPABASE_URL, SUPABASE_HEADERS, DRY_RUN, NOTIFY_OVERRIDE_LIST, FLOOD_PROTECTION_THRESHOLD
 from ..phone import normalizer
 from ..integrations.whatsapp import whatsapp
 from ..integrations.clickup import create_failure_task
@@ -80,6 +80,15 @@ class LeadIngester:
         new_leads = [rd for rd in row_data if rd["fp"] not in existing_fps]
         if not new_leads:
             log("ingester", "batch_all_duplicates", client=self.client_id, count=len(rows))
+            return 0
+
+        # Flood protection: if an anomalously large number of "new" leads appear
+        # in a single batch (e.g. cursor was stuck due to a DB error), advance the
+        # cursor silently instead of flooding phones with old data.
+        if len(new_leads) > FLOOD_PROTECTION_THRESHOLD:
+            log("ingester", "flood_protection_triggered", client=self.client_id,
+                new_leads=len(new_leads), threshold=FLOOD_PROTECTION_THRESHOLD,
+                action="cursor_advanced_no_notifications")
             return 0
 
         log("ingester", "batch_processing", client=self.client_id, new=len(new_leads), total=len(rows))
