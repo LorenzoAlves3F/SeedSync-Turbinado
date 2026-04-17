@@ -20,13 +20,15 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="Seed Sync API", lifespan=lifespan)
 
-# Allowed origins from env — must be set explicitly in production
-origins = os.getenv("CORS_ORIGINS", "http://localhost:5173").split(",")
+# CORS — allow all origins by default since the API has no auth.
+# Override by setting CORS_ORIGINS=https://example.com,https://other.com
+_cors_env = os.getenv("CORS_ORIGINS", "").strip()
+origins = [o.strip() for o in _cors_env.split(",") if o.strip()] if _cors_env else ["*"]
 
 app.add_middleware(
     CORSMiddleware,
     allow_origins=origins,
-    allow_credentials=True,
+    allow_credentials=origins != ["*"],  # credentials require specific origins
     allow_methods=["*"],
     allow_headers=["*"],
 )
