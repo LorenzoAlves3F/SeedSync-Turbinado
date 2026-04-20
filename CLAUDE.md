@@ -90,6 +90,10 @@ VITE_API_URL=http://localhost:8000
 6. **ClickUp** — If a WhatsApp send fails, `integrations/clickup.py` creates a task in the configured list.
 7. **Cursor advance** — `last_row_index` is updated in Supabase **only if all DB insertions succeeded**. Notification failure does NOT block cursor advancement.
 
+### Auto cursor fast-forward (new/reactivated clients)
+
+At the top of every cycle, before the rotating batch is selected, `main.py:fast_forward_new_clients()` scans all active configs for `last_row_index == 0`. For each, it calls `sheets.py:get_sheet_row_count()` (uses `get_all_values()` to count non-header rows) and immediately sets `last_row_index` to the current sheet bottom — so the first real ingestion cycle only picks up leads added **after** the client was configured. If the sheet is unreachable the client is excluded from the batch that cycle (not silently ingested from row 0). This means `reset_cursors.py` / `reset_remaining.py` no longer need to be run manually after adding a client via the admin wizard.
+
 ### Supabase schema
 
 All client lead tables live in the `seed_sync` schema. The `ingestion_log` table is in the `public` schema. The API and worker both write directly via Supabase's PostgREST REST API (no ORM); requests use `SUPABASE_SERVICE_ROLE_KEY` with `Prefer: return=representation` headers for insert-and-return patterns.
@@ -125,6 +129,8 @@ Custom PM2 + Nginx + Certbot deployer. Contract files live in `ops/`:
 - `ops/admin.yml` — Vite preview server; all commands prefixed with `cd admin &&`
 
 **Known Orchestrator bug**: injects spaces or newlines into long env var values (JWTs, JSON blobs) every redeploy. `run.py:_repair_env()` auto-repairs the `.env` file on every startup before spawning subprocesses.
+
+**VITE_API_URL override**: The Orchestrator sets its own `VITE_API_URL` shell env var (pointing to `api-autodeploy.3fventure.tech`) which overrides `.env` files at build time. Fix: `ops/admin.yml` `build_cmd` runs `set -a && source .env.production && set +a` before `npm run build` to export the correct URL (`api-seedsync.3fventure.tech`) into the shell, overriding the Orchestrator's value. `admin/.env.production` is committed and must not be deleted.
 
 ### Google Service Account credentials
 The Orchestrator truncates `GOOGLE_SERVICE_ACCOUNT_JSON` to ~133 chars (unusable). Solution already deployed:
