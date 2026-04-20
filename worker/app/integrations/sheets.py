@@ -56,6 +56,25 @@ async def fetch_new_rows(
     return [], {} # Fallback
 
 
+async def get_sheet_row_count(sheet_id: str, worksheet_name: str) -> int:
+    """Return current data row count (header excluded). Used to initialize new client cursors."""
+    def _count_sync() -> int:
+        client = _get_client()
+        sh = client.open_by_key(sheet_id)
+        try:
+            ws = sh.worksheet(worksheet_name)
+        except gspread.WorksheetNotFound:
+            log("sheets", "worksheet_not_found_fallback",
+                sheet_id=sheet_id, missing=worksheet_name)
+            ws = sh.get_worksheet(0)
+            if not ws:
+                return 0
+        all_v = ws.get_all_values()
+        return max(0, len(all_v) - 1)
+
+    return await asyncio.to_thread(_count_sync)
+
+
 def _fetch_sync(sheet_id: str, worksheet_name: str, last_row_index: int):
     try:
         client = _get_client()

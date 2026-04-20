@@ -11,7 +11,7 @@ from .config import POLL_INTERVAL_SECONDS, SUPABASE_URL, SUPABASE_HEADERS, DRY_R
 from .audit import log
 from .ingestion.ingester import LeadIngester
 from .ingestion.schema_manager import ensure_table_columns
-from .integrations.sheets import fetch_new_rows
+from .integrations.sheets import fetch_new_rows, get_sheet_row_count
 from .http_client import http_client
 
 # Silence noisy external logs
@@ -107,6 +107,32 @@ async def _mark_client_initialized(client_id: str, skipped: int):
         log("scheduler", "init_sentinel_failed", client=client_id, error=str(e))
 
 
+async def fast_forward_new_clients(configs: list[dict]) -> list[dict]:
+    """Fast-forward last_row_index for any client at 0 before the batch runs.
+
+    Clients where the sheet is unreachable are excluded this cycle entirely
+    rather than ingested from row 0 (which would notify on all historical leads).
+    """
+    new_clients = [c for c in configs if c.get("last_row_index", 0) == 0]
+    if not new_clients:
+        return configs
+
+    failed_ids: set[str] = set()
+    for conf in new_clients:
+        try:
+            row_count = await get_sheet_row_count(conf["sheet_id"], conf["worksheet_name"])
+            await update_cursor(conf["id"], row_count)
+            conf["last_row_index"] = row_count  # Keep in-memory consistent with DB
+            log("scheduler", "cursor_fast_forwarded",
+                client=conf["client_id"], new_index=row_count)
+        except Exception as e:
+            log("scheduler", "fast_forward_failed",
+                client=conf["client_id"], error=str(e))
+            failed_ids.add(conf["id"])
+
+    return [c for c in configs if c["id"] not in failed_ids]
+
+
 async def process_client(conf: Dict[str, Any]):
     """Async task to sync a single client with strict internal timeout and concurrency control."""
     client_id = conf["client_id"]
@@ -183,6 +209,11 @@ async def run_ingestion_batch():
     all_configs = await fetch_all_configs()
     if not all_configs:
         log("scheduler", "no_active_configs")
+        return
+
+    all_configs = await fast_forward_new_clients(all_configs)
+    if not all_configs:
+        log("scheduler", "no_eligible_configs_after_fast_forward")
         return
 
     total = len(all_configs)
