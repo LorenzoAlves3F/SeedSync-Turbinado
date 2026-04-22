@@ -34,6 +34,12 @@ STAGGER_MIN_SECS, STAGGER_MAX_SECS = 1.0, 3.0
 # Global rotating offset — persists across job cycles within the same process
 _client_offset = 0
 
+# Directory scanned at startup for per-SA credential JSON files
+CREDENTIALS_DIR = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+    "credentials",
+)
+
 # ── WhatsApp retry backoff schedule ───────────────────────────────────────────
 # Index 0 = after 1st failure (5 min), 1 = 2nd (30 min), 2 = 3rd (2 hr) → dead
 RETRY_BACKOFF_SECS: list[int] = [300, 1800, 7200]
@@ -433,6 +439,45 @@ async def run_ingestion_batch():
     log("scheduler", "batch_finished", next_offset=_client_offset % total)
 
 
+async def sync_credentials_from_disk() -> None:
+    """
+    Scan CREDENTIALS_DIR for *.json files and upsert each into google_service_accounts.
+    Uses sa_file (absolute path) as the unique key — idempotent, safe on every startup.
+    """
+    import glob as _glob
+
+    if not os.path.isdir(CREDENTIALS_DIR):
+        log("worker", "credentials_dir_missing", path=CREDENTIALS_DIR)
+        return
+
+    files = _glob.glob(os.path.join(CREDENTIALS_DIR, "*.json"))
+    if not files:
+        log("worker", "no_credential_files_found", dir=CREDENTIALS_DIR)
+        return
+
+    registered = 0
+    for path in files:
+        try:
+            with open(path) as f:
+                data = json.load(f)
+            email = data.get("client_email", "")
+            name = os.path.splitext(os.path.basename(path))[0]
+            r = await http_client.post(
+                f"{SUPABASE_URL}/rest/v1/google_service_accounts",
+                headers={**_PUBLIC_HEADERS, "Prefer": "resolution=merge-duplicates"},
+                params={"on_conflict": "sa_file"},
+                json={"name": name, "email": email, "sa_file": path},
+            )
+            if r.is_success:
+                registered += 1
+            else:
+                log("worker", "credential_sync_failed", file=path, error=r.text[:200])
+        except Exception as e:
+            log("worker", "credential_sync_exception", file=path, error=str(e))
+
+    log("worker", "credentials_synced", found=len(files), registered=registered)
+
+
 def _start_health_server():
     """Start a minimal HTTP server for orchestrator health checks (background thread)."""
     import time as _time
@@ -474,6 +519,8 @@ async def main():
         clients_per_batch=CLIENTS_PER_BATCH,
         architecture="Hardened_No_Restart_v2"
     )
+
+    await sync_credentials_from_disk()
 
     while True:
         try:
