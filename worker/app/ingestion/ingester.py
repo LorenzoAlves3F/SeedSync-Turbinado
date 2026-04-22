@@ -2,7 +2,7 @@ import hashlib
 import json
 import re
 import asyncio
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 from ..config import SUPABASE_URL, SUPABASE_HEADERS, DRY_RUN, NOTIFY_OVERRIDE_LIST, FLOOD_PROTECTION_THRESHOLD
 from ..phone import normalizer
@@ -135,7 +135,7 @@ class LeadIngester:
         await self._log_ingestion(row, fingerprint, "inserted", "pending")
 
         # Step B: Notify (fingerprint already in log — safe even if notification fails)
-        notify_status = await self._notify(row)
+        notify_status = await self._notify(row, fingerprint)
 
         # Step C: Update whatsapp_status (best-effort — notification already sent, don't abort)
         await self._patch_log_whatsapp_status(fingerprint, notify_status)
@@ -222,7 +222,7 @@ class LeadIngester:
             log("ingester", "bulk_check_failed", error=str(e) or type(e).__name__)
             return None
 
-    async def _notify(self, row: dict[str, Any]) -> str:
+    async def _notify(self, row: dict[str, Any], fingerprint: str) -> str:
         """Async notification logic. Modified for Pilot Test Override."""
         phone_raw = row.get(self.config.get("phone_column", "WHATSAPP"), "")
         name_raw = row.get(self.config.get("name_column", "NOME"), "")
@@ -284,21 +284,9 @@ class LeadIngester:
                 statuses.append("sent")
             else:
                 statuses.append("failed")
-
-                # Create ClickUp failure task if enabled (background — must log its own errors)
-                if self.config.get("clickup_enabled") and self.config.get("clickup_list_id"):
-                    async def _safe_clickup(list_id: str, title: str, desc: str) -> None:
-                        try:
-                            await create_failure_task(list_id=list_id, title=title, description=desc, assignees=[], priority=1)
-                        except Exception as cu_err:
-                            log("ingester", "clickup_task_exception", client=self.client_id, error=str(cu_err))
-                    asyncio.create_task(_safe_clickup(
-                        list_id=self.config.get("clickup_list_id"),
-                        title=f"Falha Notificação ({self.client_id})",
-                        desc=f"Falha ao enviar mensagem para {dest_phone} do lead {name_raw}: {send_res.error}",
-                    ))
-                else:
-                    log("ingester", "clickup_alert_disabled", client=self.client_id)
+                # Enqueue for auto-retry (5 min → 30 min → 2 hr backoff).
+                # ClickUp task is created only after all retries are exhausted (by process_retry_queue).
+                await self._enqueue_retry(dest_phone, msg, fingerprint)
 
         return "sent" if "sent" in statuses else "failed"
 
@@ -345,3 +333,46 @@ class LeadIngester:
         except Exception as e:
             log("ingester", "log_status_patch_failed", client=self.client_id,
                 fp_prefix=fingerprint[:8], error=str(e))
+
+    async def _enqueue_retry(
+        self,
+        destination_phone: str,
+        message: str,
+        lead_fingerprint: str,
+    ) -> None:
+        """Insert a failed send into notification_queue for auto-retry. Best-effort — does not raise."""
+        if DRY_RUN:
+            log("ingester", "DRY_RUN enqueue_retry",
+                client=self.client_id, phone=destination_phone)
+            return
+        # public schema table — headers must NOT include Accept-Profile/Content-Profile seed_sync
+        public_headers = {
+            "apikey": SUPABASE_HEADERS["apikey"],
+            "Authorization": SUPABASE_HEADERS["Authorization"],
+            "Content-Type": "application/json",
+            "Prefer": "return=minimal",
+        }
+        try:
+            next_retry = (datetime.now(timezone.utc) + timedelta(seconds=300)).isoformat()
+            r = await http_client.post(
+                f"{SUPABASE_URL}/rest/v1/notification_queue",
+                headers=public_headers,
+                json={
+                    "client_id": self.client_id,
+                    "destination_phone": destination_phone,
+                    "message": message,
+                    "lead_fingerprint": lead_fingerprint,
+                    "retry_count": 0,
+                    "next_retry_at": next_retry,
+                    "status": "pending",
+                },
+            )
+            if r.is_success:
+                log("ingester", "retry_queued",
+                    client=self.client_id, phone=destination_phone,
+                    fp=lead_fingerprint[:8])
+            else:
+                log("ingester", "retry_queue_insert_failed",
+                    client=self.client_id, error=r.text[:ERROR_TEXT_MAX_LEN])
+        except Exception as e:
+            log("ingester", "retry_queue_exception", client=self.client_id, error=str(e))

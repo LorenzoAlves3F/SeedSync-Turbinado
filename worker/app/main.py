@@ -4,7 +4,7 @@ import logging
 import os
 import random
 import threading
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from typing import Dict, Any
 from .config import POLL_INTERVAL_SECONDS, SUPABASE_URL, SUPABASE_HEADERS, DRY_RUN
@@ -12,6 +12,8 @@ from .audit import log
 from .ingestion.ingester import LeadIngester
 from .ingestion.schema_manager import ensure_table_columns
 from .integrations.sheets import fetch_new_rows, get_sheet_row_count
+from .integrations.whatsapp import ZApiProvider
+from .integrations.clickup import create_failure_task
 from .http_client import http_client
 
 # Silence noisy external logs
@@ -32,6 +34,19 @@ STAGGER_MIN_SECS, STAGGER_MAX_SECS = 1.0, 3.0
 # Global rotating offset — persists across job cycles within the same process
 _client_offset = 0
 
+# ── WhatsApp retry backoff schedule ───────────────────────────────────────────
+# Index 0 = after 1st failure (5 min), 1 = 2nd (30 min), 2 = 3rd (2 hr) → dead
+RETRY_BACKOFF_SECS: list[int] = [300, 1800, 7200]
+
+# Headers for public-schema tables (notification_queue, google_service_accounts).
+# MUST NOT include Accept-Profile/Content-Profile — those force seed_sync schema.
+_PUBLIC_HEADERS = {
+    "apikey": SUPABASE_HEADERS["apikey"],
+    "Authorization": SUPABASE_HEADERS["Authorization"],
+    "Content-Type": "application/json",
+    "Prefer": "return=representation",
+}
+
 # Global Semaphore to prevent "burst" pressure on Google Sheets API
 _sheets_semaphore = asyncio.Semaphore(MAX_CONCURRENT_SHEETS)
 
@@ -51,6 +66,23 @@ async def fetch_all_configs():
     except Exception as e:
         log("scheduler", "fetch_configs_exception", error=str(e))
         return []
+
+
+async def fetch_all_credentials() -> dict[str, str]:
+    """Fetch google_service_accounts and return {id: sa_file_path}. Empty dict on any error."""
+    try:
+        r = await http_client.get(
+            f"{SUPABASE_URL}/rest/v1/google_service_accounts",
+            headers=_PUBLIC_HEADERS,
+            params={"select": "id,sa_file"},
+        )
+        if r.is_success:
+            return {row["id"]: row["sa_file"] for row in r.json()}
+        log("scheduler", "fetch_credentials_failed", error=r.text[:200])
+        return {}
+    except Exception as e:
+        log("scheduler", "fetch_credentials_exception", error=str(e))
+        return {}
 
 
 async def update_cursor(config_id: str, new_index: int):
@@ -107,7 +139,10 @@ async def _mark_client_initialized(client_id: str, skipped: int):
         log("scheduler", "init_sentinel_failed", client=client_id, error=str(e))
 
 
-async def fast_forward_new_clients(configs: list[dict]) -> list[dict]:
+async def fast_forward_new_clients(
+    configs: list[dict],
+    credentials: dict[str, str],
+) -> list[dict]:
     """Fast-forward last_row_index for any client at 0 before the batch runs.
 
     Clients where the sheet is unreachable are excluded this cycle entirely
@@ -119,8 +154,11 @@ async def fast_forward_new_clients(configs: list[dict]) -> list[dict]:
 
     failed_ids: set[str] = set()
     for conf in new_clients:
+        sa_file = credentials.get(conf.get("google_sa_id") or "", "")
         try:
-            row_count = await get_sheet_row_count(conf["sheet_id"], conf["worksheet_name"])
+            row_count = await get_sheet_row_count(
+                conf["sheet_id"], conf["worksheet_name"], sa_file=sa_file
+            )
             await update_cursor(conf["id"], row_count)
             conf["last_row_index"] = row_count  # Keep in-memory consistent with DB
             log("scheduler", "cursor_fast_forwarded",
@@ -133,12 +171,13 @@ async def fast_forward_new_clients(configs: list[dict]) -> list[dict]:
     return [c for c in configs if c["id"] not in failed_ids]
 
 
-async def process_client(conf: Dict[str, Any]):
+async def process_client(conf: Dict[str, Any], credentials: dict[str, str]):
     """Async task to sync a single client with strict internal timeout and concurrency control."""
     client_id = conf["client_id"]
     sheet_id = conf["sheet_id"]
     worksheet = conf["worksheet_name"]
     last_index = conf["last_row_index"]
+    sa_file = credentials.get(conf.get("google_sa_id") or "", "")
 
     # Use semaphore to throttle concurrent Google Sheets requests
     async with _sheets_semaphore:
@@ -146,7 +185,7 @@ async def process_client(conf: Dict[str, Any]):
             # Wrap the actual ingestion in an internal timeout
             async def _run_sync():
                 # 1. Fetch new rows strictly forward
-                rows, header_sample = await fetch_new_rows(sheet_id, worksheet, last_index)
+                rows, header_sample = await fetch_new_rows(sheet_id, worksheet, last_index, sa_file=sa_file)
                 if not rows:
                     return 0
 
@@ -202,16 +241,158 @@ async def process_client(conf: Dict[str, Any]):
             log("scheduler", "client_error", client=client_id, error=str(e))
 
 
+async def process_retry_queue() -> None:
+    """
+    Poll notification_queue for pending rows whose next_retry_at has passed,
+    attempt resend, and update status or schedule next backoff.
+
+    Backoff: 5 min → 30 min → 2 hr. After 3 failures the row is marked dead
+    and a ClickUp task is created (only at this terminal state, not on first fail).
+    """
+    try:
+        r = await http_client.get(
+            f"{SUPABASE_URL}/rest/v1/notification_queue",
+            headers=_PUBLIC_HEADERS,
+            params={
+                "status": "eq.pending",
+                "next_retry_at": f"lte.{datetime.now(timezone.utc).isoformat()}",
+                "order": "next_retry_at.asc",
+                "limit": "50",
+            },
+        )
+        if not r.is_success:
+            log("scheduler", "retry_queue_fetch_failed", error=r.text[:200])
+            return
+        rows = r.json()
+    except Exception as e:
+        log("scheduler", "retry_queue_fetch_exception", error=str(e))
+        return
+
+    if not rows:
+        return
+
+    log("scheduler", "retry_queue_processing", count=len(rows))
+    provider = ZApiProvider()
+
+    for row in rows:
+        row_id = row["id"]
+        retry_count = row["retry_count"]
+        client_id = row["client_id"]
+        dest_phone = row["destination_phone"]
+        message = row["message"]
+        fingerprint = row["lead_fingerprint"]
+
+        if DRY_RUN:
+            log("scheduler", "DRY_RUN retry_skip", row_id=row_id, client=client_id)
+            continue
+
+        send_res = await provider.send_text(dest_phone, message)
+
+        try:
+            if send_res.success:
+                await http_client.patch(
+                    f"{SUPABASE_URL}/rest/v1/notification_queue",
+                    headers=_PUBLIC_HEADERS,
+                    params={"id": f"eq.{row_id}"},
+                    json={"status": "sent"},
+                )
+                # Best-effort: sync ingestion_log status
+                await http_client.patch(
+                    f"{SUPABASE_URL}/rest/v1/ingestion_log",
+                    headers=SUPABASE_HEADERS,
+                    params={"row_fingerprint": f"eq.{fingerprint}", "client_id": f"eq.{client_id}"},
+                    json={"whatsapp_status": "sent"},
+                )
+                log("scheduler", "retry_sent",
+                    row_id=row_id, client=client_id, attempt=retry_count + 1)
+
+            else:
+                new_count = retry_count + 1
+
+                if new_count >= len(RETRY_BACKOFF_SECS):
+                    await http_client.patch(
+                        f"{SUPABASE_URL}/rest/v1/notification_queue",
+                        headers=_PUBLIC_HEADERS,
+                        params={"id": f"eq.{row_id}"},
+                        json={
+                            "status": "dead",
+                            "retry_count": new_count,
+                            "last_error": (send_res.error or "")[:500],
+                        },
+                    )
+                    log("scheduler", "retry_dead",
+                        row_id=row_id, client=client_id, attempts=new_count)
+
+                    # Fetch ClickUp config and fire task
+                    cfg_r = await http_client.get(
+                        f"{SUPABASE_URL}/rest/v1/source_configs",
+                        headers=SUPABASE_HEADERS,
+                        params={"client_id": f"eq.{client_id}",
+                                "select": "clickup_enabled,clickup_list_id", "limit": "1"},
+                    )
+                    if cfg_r.is_success and cfg_r.json():
+                        cfg = cfg_r.json()[0]
+                        if cfg.get("clickup_enabled") and cfg.get("clickup_list_id"):
+                            async def _safe_clickup(list_id: str, cid: str, phone: str, err: str) -> None:
+                                try:
+                                    await create_failure_task(
+                                        list_id=list_id,
+                                        title=f"Falha Notificação ({cid}) — todas as tentativas esgotadas",
+                                        description=(
+                                            f"Não foi possível entregar notificação para {phone} "
+                                            f"após {len(RETRY_BACKOFF_SECS)} tentativas.\n"
+                                            f"Último erro: {err}"
+                                        ),
+                                        assignees=[],
+                                        priority=1,
+                                    )
+                                except Exception as cu_err:
+                                    log("scheduler", "retry_clickup_exception",
+                                        client=cid, error=str(cu_err))
+                            asyncio.create_task(_safe_clickup(
+                                cfg["clickup_list_id"], client_id,
+                                dest_phone, send_res.error or "",
+                            ))
+                else:
+                    next_wait = RETRY_BACKOFF_SECS[new_count]
+                    next_retry_at = (
+                        datetime.now(timezone.utc) + timedelta(seconds=next_wait)
+                    ).isoformat()
+                    await http_client.patch(
+                        f"{SUPABASE_URL}/rest/v1/notification_queue",
+                        headers=_PUBLIC_HEADERS,
+                        params={"id": f"eq.{row_id}"},
+                        json={
+                            "retry_count": new_count,
+                            "next_retry_at": next_retry_at,
+                            "last_error": (send_res.error or "")[:500],
+                        },
+                    )
+                    log("scheduler", "retry_rescheduled",
+                        row_id=row_id, client=client_id,
+                        retry_count=new_count, next_wait_secs=next_wait)
+
+        except Exception as e:
+            log("scheduler", "retry_row_exception",
+                row_id=row_id, client=client_id, error=str(e))
+
+
 async def run_ingestion_batch():
     """Fetch all configs, then process only the next CLIENTS_PER_BATCH slice."""
     global _client_offset
+
+    # ── Retry queue pass (before new-lead ingestion) ─────────────────────────
+    await process_retry_queue()
 
     all_configs = await fetch_all_configs()
     if not all_configs:
         log("scheduler", "no_active_configs")
         return
 
-    all_configs = await fast_forward_new_clients(all_configs)
+    # ── Credential map: fetched once per cycle ────────────────────────────────
+    credentials = await fetch_all_credentials()
+
+    all_configs = await fast_forward_new_clients(all_configs, credentials)
     if not all_configs:
         log("scheduler", "no_eligible_configs_after_fast_forward")
         return
@@ -222,7 +403,7 @@ async def run_ingestion_batch():
 
     if len(batch) < CLIENTS_PER_BATCH and total > len(batch):
         batch += all_configs[: CLIENTS_PER_BATCH - len(batch)]
-    
+
     # Final safety: Ensure no duplicate client IDs in the SAME batch
     unique_batch = []
     seen_ids = set()
@@ -243,7 +424,7 @@ async def run_ingestion_batch():
     # Process batch with slight sequential jitter to further spread load
     tasks = []
     for conf in batch:
-        tasks.append(process_client(conf))
+        tasks.append(process_client(conf, credentials))
         await asyncio.sleep(random.uniform(STAGGER_MIN_SECS, STAGGER_MAX_SECS))  # Staggered launch
 
     await asyncio.gather(*tasks, return_exceptions=True)

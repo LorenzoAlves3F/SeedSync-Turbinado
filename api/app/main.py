@@ -51,6 +51,7 @@ class ClientConfig(BaseModel):
     clickup_list_id: Optional[str] = None
     clickup_enabled: bool = True
     active: bool = True
+    google_sa_id: Optional[str] = None
 
 
 class ClientConfigPatch(BaseModel):
@@ -64,6 +65,13 @@ class ClientConfigPatch(BaseModel):
     clickup_list_id: Optional[str] = None
     clickup_enabled: Optional[bool] = None
     active: Optional[bool] = None
+    google_sa_id: Optional[str] = None
+
+
+class GoogleServiceAccount(BaseModel):
+    name: str
+    email: str
+    sa_file: str  # Absolute path on VPS, e.g. /opt/apps/seedsync/worker/credentials/agro.json
 
 
 # ──────────────────── Health ────────────────────
@@ -224,6 +232,59 @@ async def reset_all_cursors():
         
     return {"status": "reset_initiated", "cluster_size": count, "buffer_size": 50}
 
+
+
+# ──────────────────── Credentials (Google Service Accounts) ────────────────
+
+# public-schema tables must NOT receive Accept-Profile/Content-Profile headers
+_PUBLIC_HEADERS = {
+    "apikey": SUPABASE_HEADERS["apikey"],
+    "Authorization": SUPABASE_HEADERS["Authorization"],
+    "Content-Type": "application/json",
+    "Prefer": "return=representation",
+}
+
+
+@app.get("/credentials")
+async def list_credentials():
+    """List all registered Google Service Accounts."""
+    r = await http_client.get(
+        f"{SUPABASE_URL}/rest/v1/google_service_accounts",
+        headers=_PUBLIC_HEADERS,
+        params={"order": "created_at.desc"},
+    )
+    if not r.is_success:
+        raise HTTPException(status_code=r.status_code, detail=r.text)
+    return r.json()
+
+
+@app.post("/credentials", status_code=201)
+async def create_credential(body: GoogleServiceAccount):
+    """Register a new Google Service Account (credentials file must already be on VPS)."""
+    r = await http_client.post(
+        f"{SUPABASE_URL}/rest/v1/google_service_accounts",
+        headers=_PUBLIC_HEADERS,
+        json=body.model_dump(),
+    )
+    if not r.is_success:
+        raise HTTPException(status_code=r.status_code, detail=r.text)
+    return r.json()
+
+
+@app.delete("/credentials/{credential_id}")
+async def delete_credential(credential_id: str):
+    """
+    Remove a Google Service Account record. Associated source_configs rows will have
+    google_sa_id set to NULL (ON DELETE SET NULL) and fall back to the global default SA.
+    """
+    r = await http_client.delete(
+        f"{SUPABASE_URL}/rest/v1/google_service_accounts",
+        headers=_PUBLIC_HEADERS,
+        params={"id": f"eq.{credential_id}"},
+    )
+    if not r.is_success:
+        raise HTTPException(status_code=r.status_code, detail=r.text)
+    return {"deleted": credential_id}
 
 
 # ──────────────────── Sheets Exploration ────────────────────
