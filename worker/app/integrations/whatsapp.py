@@ -11,6 +11,7 @@ class SendResult:
     provider: str = "zapi"
     status_code: Optional[int] = None
     error: Optional[str] = None
+    message_id: Optional[str] = None
 
 
 class ZApiProvider:
@@ -29,7 +30,9 @@ class ZApiProvider:
                 json={"phone": phone, "message": message},
             )
             if r.is_success:
-                return SendResult(success=True, status_code=r.status_code)
+                data = r.json() if r.headers.get("content-type", "").startswith("application/json") else {}
+                return SendResult(success=True, status_code=r.status_code,
+                                  message_id=data.get("zaapId") or data.get("messageId"))
             return SendResult(success=False, status_code=r.status_code,
                               error=r.text[:200])
         except Exception as e:

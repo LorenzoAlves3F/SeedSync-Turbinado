@@ -7,7 +7,7 @@ import threading
 from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from typing import Dict, Any
-from .config import POLL_INTERVAL_SECONDS, SUPABASE_URL, SUPABASE_HEADERS, DRY_RUN
+from .config import POLL_INTERVAL_SECONDS, SUPABASE_URL, SUPABASE_HEADERS, DRY_RUN, ZAPI_BASE_URL, ZAPI_CLIENT_TOKEN
 from .audit import log
 from .ingestion.ingester import LeadIngester
 from .ingestion.schema_manager import ensure_table_columns
@@ -177,7 +177,28 @@ async def fast_forward_new_clients(
     return [c for c in configs if c["id"] not in failed_ids]
 
 
-async def process_client(conf: Dict[str, Any], credentials: dict[str, str]):
+async def check_zapi_session() -> bool:
+    """Return True if Z-API WhatsApp session is connected. Always True in DRY_RUN."""
+    if DRY_RUN:
+        return True
+    try:
+        r = await http_client.get(
+            f"{ZAPI_BASE_URL}status",
+            headers={"Client-Token": ZAPI_CLIENT_TOKEN},
+        )
+        if r.is_success:
+            connected = r.json().get("connected", False)
+            if not connected:
+                log("worker", "zapi_session_disconnected", response=r.text[:200])
+            return connected
+        log("worker", "zapi_status_check_failed", status_code=r.status_code, error=r.text[:200])
+        return False
+    except Exception as e:
+        log("worker", "zapi_status_check_exception", error=str(e))
+        return False
+
+
+async def process_client(conf: Dict[str, Any], credentials: dict[str, str], zapi_ok: bool = True):
     """Async task to sync a single client with strict internal timeout and concurrency control."""
     client_id = conf["client_id"]
     sheet_id = conf["sheet_id"]
@@ -214,7 +235,7 @@ async def process_client(conf: Dict[str, Any], credentials: dict[str, str]):
                     return 0
 
                 # 3. Process batch
-                ingester = LeadIngester(client_id, conf)
+                ingester = LeadIngester(client_id, conf, notify=zapi_ok)
                 try:
                     success_count = await ingester.process_batch(rows)
                 except Exception as e:
@@ -387,8 +408,14 @@ async def run_ingestion_batch():
     """Fetch all configs, then process only the next CLIENTS_PER_BATCH slice."""
     global _client_offset
 
+    # ── Z-API session check — gate all sends and retry processing ────────────
+    zapi_ok = await check_zapi_session()
+
     # ── Retry queue pass (before new-lead ingestion) ─────────────────────────
-    await process_retry_queue()
+    if zapi_ok:
+        await process_retry_queue()
+    else:
+        log("worker", "retry_queue_skipped_session_down")
 
     all_configs = await fetch_all_configs()
     if not all_configs:
@@ -430,7 +457,7 @@ async def run_ingestion_batch():
     # Process batch with slight sequential jitter to further spread load
     tasks = []
     for conf in batch:
-        tasks.append(process_client(conf, credentials))
+        tasks.append(process_client(conf, credentials, zapi_ok))
         await asyncio.sleep(random.uniform(STAGGER_MIN_SECS, STAGGER_MAX_SECS))  # Staggered launch
 
     await asyncio.gather(*tasks, return_exceptions=True)

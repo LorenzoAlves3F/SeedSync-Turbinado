@@ -21,7 +21,7 @@ ERROR_TEXT_MAX_LEN = 200  # Max characters captured from error response bodies
 class LeadIngester:
     """Core logic for lead processing: async and batch optimized."""
 
-    def __init__(self, client_id: str, config: dict):
+    def __init__(self, client_id: str, config: dict, notify: bool = True):
         """
         Args:
             client_id: Unique identifier for this client (e.g. "GEOTECH").
@@ -33,10 +33,13 @@ class LeadIngester:
                 Optional keys:
                 - clickup_enabled (bool), clickup_list_id (str): ClickUp alerts.
                 - legacy_phone (str): Fallback destination if destination_phones is empty.
+            notify: If False, skip live WhatsApp sends and enqueue directly
+                    (used when Z-API session is disconnected).
         """
         self.client_id = client_id
         self.config = config
         self.target_table = config["target_table"]
+        self.notify = notify
 
     async def process_batch(self, rows: list[dict[str, Any]]) -> int:
         """
@@ -262,6 +265,18 @@ class LeadIngester:
             log("ingester", "no_destinations_configured", client=self.client_id)
             return "failed"
 
+        # ── SESSION DOWN: enqueue directly without attempting live send ──
+        if not self.notify:
+            log("ingester", "session_down_enqueueing", client=self.client_id,
+                dests=len(dests))
+            for dest in dests:
+                if not dest:
+                    continue
+                dest_res = normalizer.normalize(str(dest))
+                if dest_res.valid:
+                    await self._enqueue_retry(dest_res.phone, msg, fingerprint)
+            return "queued"
+
         statuses = []
 
         for dest in dests:
@@ -281,12 +296,14 @@ class LeadIngester:
                 # Only send contact card if the lead's own phone is a valid mobile
                 if lead_res.valid:
                     await whatsapp.send_contact(dest_phone, name_raw or "Lead", lead_res.phone)
+                if send_res.message_id:
+                    await self._patch_log_message_id(fingerprint, send_res.message_id)
                 statuses.append("sent")
             else:
                 statuses.append("failed")
                 # Enqueue for auto-retry (5 min → 30 min → 2 hr backoff).
                 # ClickUp task is created only after all retries are exhausted (by process_retry_queue).
-                await self._enqueue_retry(dest_phone, msg, fingerprint)
+                await self._enqueue_retry(dest_phone, msg, fingerprint, send_res.message_id)
 
         return "sent" if "sent" in statuses else "failed"
 
@@ -317,6 +334,19 @@ class LeadIngester:
                 http_status=r.status_code, error=r.text[:ERROR_TEXT_MAX_LEN])
             raise Exception(f"ingestion_log write failed ({r.status_code}): {r.text[:80]}")
 
+    async def _patch_log_message_id(self, fingerprint: str, message_id: str) -> None:
+        """Best-effort: store Z-API messageId in ingestion_log for delivery webhook correlation."""
+        try:
+            await http_client.patch(
+                f"{SUPABASE_URL}/rest/v1/ingestion_log",
+                headers={**SUPABASE_HEADERS},
+                params={"row_fingerprint": f"eq.{fingerprint}", "client_id": f"eq.{self.client_id}"},
+                json={"zapi_message_id": message_id},
+            )
+        except Exception as e:
+            log("ingester", "patch_message_id_failed",
+                fp_prefix=fingerprint[:8], error=str(e))
+
     async def _patch_log_whatsapp_status(self, fingerprint: str, whatsapp_status: str):
         """Best-effort update of whatsapp_status after notification. Does NOT raise."""
         try:
@@ -339,8 +369,9 @@ class LeadIngester:
         destination_phone: str,
         message: str,
         lead_fingerprint: str,
+        message_id: str | None = None,
     ) -> None:
-        """Insert a failed send into notification_queue for auto-retry. Best-effort — does not raise."""
+        """Insert a failed/queued send into notification_queue for auto-retry. Best-effort — does not raise."""
         if DRY_RUN:
             log("ingester", "DRY_RUN enqueue_retry",
                 client=self.client_id, phone=destination_phone)
@@ -354,18 +385,21 @@ class LeadIngester:
         }
         try:
             next_retry = (datetime.now(timezone.utc) + timedelta(seconds=300)).isoformat()
+            body: dict = {
+                "client_id": self.client_id,
+                "destination_phone": destination_phone,
+                "message": message,
+                "lead_fingerprint": lead_fingerprint,
+                "retry_count": 0,
+                "next_retry_at": next_retry,
+                "status": "pending",
+            }
+            if message_id:
+                body["zapi_message_id"] = message_id
             r = await http_client.post(
                 f"{SUPABASE_URL}/rest/v1/notification_queue",
                 headers=public_headers,
-                json={
-                    "client_id": self.client_id,
-                    "destination_phone": destination_phone,
-                    "message": message,
-                    "lead_fingerprint": lead_fingerprint,
-                    "retry_count": 0,
-                    "next_retry_at": next_retry,
-                    "status": "pending",
-                },
+                json=body,
             )
             if r.is_success:
                 log("ingester", "retry_queued",

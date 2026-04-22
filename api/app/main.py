@@ -1,12 +1,12 @@
 import os
 import re
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import List, Optional
 import httpx
-from .config import SUPABASE_URL, SUPABASE_HEADERS
+from .config import SUPABASE_URL, SUPABASE_HEADERS, ZAPI_CLIENT_TOKEN
 from .utils.sheets_utils import list_worksheets, get_sheet_columns
 
 @asynccontextmanager
@@ -303,3 +303,58 @@ async def get_columns(sheet_id: str, worksheet_name: str):
         return get_sheet_columns(sheet_id, worksheet_name)
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
+
+
+# ──────────────────── Z-API Delivery Webhook ────────────────────
+
+@app.post("/webhook/zapi", status_code=200)
+async def zapi_delivery_webhook(request: Request):
+    """
+    Receive Z-API delivery callbacks and update delivery status in ingestion_log
+    and notification_queue.
+
+    Configure in Z-API dashboard:
+      Webhook URL = https://api-seedsync.3fventure.tech/webhook/zapi
+      Event: DeliveryCallback (or MessageStatusCallback)
+    """
+    try:
+        payload = await request.json()
+    except Exception:
+        return {"ok": False, "error": "invalid_json"}
+
+    # Z-API sends different event shapes depending on version/plan.
+    # Extract the common fields we care about.
+    message_id = (
+        payload.get("messageId")
+        or payload.get("zaapId")
+        or payload.get("momentsId")
+    )
+    is_delivered = (
+        payload.get("isDelivered") is True
+        or payload.get("status") in ("DELIVERED", "READ")
+    )
+
+    if not message_id or not is_delivered:
+        return {"ok": True, "action": "ignored"}
+
+    public_headers = {
+        "apikey": SUPABASE_HEADERS["apikey"],
+        "Authorization": SUPABASE_HEADERS["Authorization"],
+        "Content-Type": "application/json",
+    }
+
+    # Best-effort updates — don't raise on individual failures
+    await http_client.patch(
+        f"{SUPABASE_URL}/rest/v1/notification_queue",
+        headers=public_headers,
+        params={"zapi_message_id": f"eq.{message_id}"},
+        json={"status": "delivered"},
+    )
+    await http_client.patch(
+        f"{SUPABASE_URL}/rest/v1/ingestion_log",
+        headers={**SUPABASE_HEADERS},
+        params={"zapi_message_id": f"eq.{message_id}"},
+        json={"whatsapp_status": "delivered"},
+    )
+
+    return {"ok": True, "messageId": message_id}
