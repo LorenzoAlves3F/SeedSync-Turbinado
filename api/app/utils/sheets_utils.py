@@ -18,8 +18,12 @@ _SA_PATH = os.getenv("GOOGLE_SERVICE_ACCOUNT_PATH", "").strip() or os.path.join(
 
 def get_sheets_client():
     if _SA_JSON:
-        info = json.loads(_SA_JSON)
-        creds = Credentials.from_service_account_info(info, scopes=SCOPES)
+        try:
+            info = json.loads(_SA_JSON)
+            creds = Credentials.from_service_account_info(info, scopes=SCOPES)
+        except (json.JSONDecodeError, ValueError):
+            # Orchestrator truncates the JSON env var — fall back to file
+            creds = Credentials.from_service_account_file(_SA_PATH, scopes=SCOPES)
     else:
         creds = Credentials.from_service_account_file(_SA_PATH, scopes=SCOPES)
     return gspread.authorize(creds)
