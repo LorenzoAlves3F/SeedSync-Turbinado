@@ -1,8 +1,8 @@
 import React, { useState } from 'react';
-import { 
-  LayoutPanelLeft, 
-  ArrowRight, Loader2, RefreshCw, 
-  X, MessageSquare, AlertCircle, CheckSquare, 
+import {
+  LayoutPanelLeft,
+  ArrowRight, Loader2, RefreshCw,
+  X, MessageSquare, AlertCircle, CheckSquare,
   Globe, Fingerprint, Zap, ShieldCheck
 } from 'lucide-react';
 import axios from 'axios';
@@ -16,17 +16,15 @@ const CreateClient: React.FC<CreateClientProps> = ({ initialConfig, onSuccess })
   const [step, setStep] = useState(1);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
-  
-  // Form State
+
   const [name, setName] = useState(initialConfig?.name || '');
   const [sheetUrl, setSheetUrl] = useState(initialConfig ? `https://docs.google.com/spreadsheets/d/${initialConfig.sheet_id}/edit` : '');
   const [sheetId, setSheetId] = useState(initialConfig?.sheet_id || '');
   const [worksheets, setWorksheets] = useState<{id: string, title: string}[]>([]);
-  
-  // Multi-tab support
+
   const [selectedWorksheets, setSelectedWorksheets] = useState<{title: string, phones: string[]}[]>(
-    initialConfig 
-      ? [{ title: initialConfig.worksheet_name, phones: initialConfig.destination_phones || [''] }] 
+    initialConfig
+      ? [{ title: initialConfig.worksheet_name, phones: initialConfig.destination_phones || [''] }]
       : []
   );
 
@@ -44,10 +42,10 @@ const CreateClient: React.FC<CreateClientProps> = ({ initialConfig, onSuccess })
   const handleNextStep1 = async () => {
     const id = extractId(sheetUrl);
     if (!id || !name.trim()) {
-      setError('Identity check failed. Please provide a valid Name and Spreadsheet URL.');
+      setError('Verifique o Nome e a URL da planilha.');
       return;
     }
-    
+
     setLoading(true);
     setError('');
     try {
@@ -59,7 +57,7 @@ const CreateClient: React.FC<CreateClientProps> = ({ initialConfig, onSuccess })
       }
       setStep(2);
     } catch {
-      setError('Handshake failed. Ensure the service email has ARCHIVE access.');
+      setError('Falha na conexão. Verifique se o e-mail de serviço tem acesso à planilha.');
     } finally {
       setLoading(false);
     }
@@ -72,7 +70,7 @@ const CreateClient: React.FC<CreateClientProps> = ({ initialConfig, onSuccess })
       const worksheetsData = await api.get<{id: string, title: string}[]>(`/sheets/${sheetId}/worksheets`).then(r => r.data);
       setWorksheets(worksheetsData);
     } catch {
-      setError('Relay error. Could not fetch tabs.');
+      setError('Erro ao buscar abas da planilha.');
     } finally {
       setLoading(false);
     }
@@ -93,7 +91,7 @@ const CreateClient: React.FC<CreateClientProps> = ({ initialConfig, onSuccess })
 
   const handleNextStep2 = async () => {
     if (selectedWorksheets.length === 0) {
-      setError('Pipeline requires at least one source tab.');
+      setError('Selecione pelo menos uma aba.');
       return;
     }
     setLoading(true);
@@ -103,7 +101,7 @@ const CreateClient: React.FC<CreateClientProps> = ({ initialConfig, onSuccess })
       setColumns(columnsData);
       setStep(3);
     } catch {
-      setError('Mapping failed. Structure unreadable.');
+      setError('Erro ao ler estrutura da planilha.');
     } finally {
       setLoading(false);
     }
@@ -141,7 +139,7 @@ const CreateClient: React.FC<CreateClientProps> = ({ initialConfig, onSuccess })
 
   const handleSave = async () => {
     if (selectedWorksheets.some(ws => ws.phones.filter(p => p.trim()).length === 0)) {
-      setError('Target identification required for all pipelines.');
+      setError('Informe pelo menos um telefone destinatário em cada aba.');
       return;
     }
 
@@ -182,15 +180,15 @@ const CreateClient: React.FC<CreateClientProps> = ({ initialConfig, onSuccess })
       }
 
       if (onSuccess) onSuccess();
-      else alert(initialConfig ? 'Deployment Updated!' : 'Cluster Deployed Successfully!');
+      else alert(initialConfig ? 'Pipeline atualizado!' : 'Pipeline criado com sucesso!');
     } catch (e: unknown) {
-      let message = 'Unknown error';
+      let message = 'Erro desconhecido';
       if (axios.isAxiosError(e)) {
         message = e.response?.data?.detail || e.message;
       } else if (e instanceof Error) {
         message = e.message;
       }
-      setError('Deployment failed: ' + message);
+      setError('Falha ao salvar: ' + message);
     } finally {
       setLoading(false);
     }
@@ -198,44 +196,44 @@ const CreateClient: React.FC<CreateClientProps> = ({ initialConfig, onSuccess })
 
   return (
     <div className="mesh-bg min-h-screen p-10 pb-24 space-y-12 animate-in fade-in zoom-in-95 duration-500">
-      {/* Dynamic Header */}
+      {/* Cabeçalho */}
       <header className="max-w-5xl mx-auto flex flex-col md:flex-row items-start md:items-end justify-between gap-6">
         <div className="space-y-2">
           <div className="flex items-center gap-2">
             <Zap className="text-emerald-500" size={16} />
-            <span className="text-[10px] font-black text-emerald-600 uppercase tracking-[0.3em]">Deployment Wizard</span>
+            <span className="text-[10px] font-black text-emerald-600 uppercase tracking-[0.3em]">Assistente de Configuração</span>
           </div>
           <h2 className="text-5xl font-black text-slate-900 tracking-tight leading-none">
-            {initialConfig ? 'Refactor' : 'New'} <span className="text-emerald-500 italic">Pipeline</span>
+            {initialConfig ? 'Editar' : 'Novo'} <span className="text-emerald-500 italic">Pipeline</span>
           </h2>
-          <p className="text-slate-500 font-medium">{initialConfig ? 'Modify existing cluster parameters' : 'Architect a new lead ingestion node in 4 stages.'}</p>
+          <p className="text-slate-500 font-medium">{initialConfig ? 'Modificar parâmetros do pipeline existente.' : 'Configure um novo pipeline de captação em 4 etapas.'}</p>
         </div>
-        
+
         <div className="flex items-center gap-4">
              {step > 1 && (
-                <button 
+                <button
                   onClick={() => setStep(step - 1)}
                   className="px-6 py-4 bg-white border border-slate-200 rounded-2xl text-sm font-black text-slate-400 hover:text-slate-600 transition-all"
                 >
-                  Back
+                  Voltar
                 </button>
              )}
         </div>
       </header>
 
-      {/* Progress Matrix */}
+      {/* Progresso */}
       <div className="max-w-5xl mx-auto grid grid-cols-4 gap-6">
         {[
-          { label: 'Connect', icon: Globe },
-          { label: 'Source', icon: LayoutPanelLeft },
-          { label: 'Map', icon: Fingerprint },
-          { label: 'Relay', icon: MessageSquare }
+          { label: 'Conectar', icon: Globe },
+          { label: 'Fonte', icon: LayoutPanelLeft },
+          { label: 'Mapear', icon: Fingerprint },
+          { label: 'Envio', icon: MessageSquare }
         ].map((s, i) => {
           const isActive = step === i + 1;
           const isDone = step > i + 1;
           return (
             <div key={i} className={`p-6 rounded-[2rem] border-2 transition-all duration-500 flex flex-col items-center gap-4 ${
-              isActive ? 'bg-white border-emerald-500 shadow-xl shadow-emerald-900/5' : 
+              isActive ? 'bg-white border-emerald-500 shadow-xl shadow-emerald-900/5' :
               isDone ? 'bg-emerald-50/50 border-emerald-200 opacity-60' : 'bg-white/40 border-slate-100 opacity-40'
             }`}>
                <div className={`w-10 h-10 rounded-xl flex items-center justify-center ${isActive ? 'bg-emerald-500 text-white shadow-lg' : 'bg-slate-100 text-slate-400'}`}>
@@ -247,7 +245,7 @@ const CreateClient: React.FC<CreateClientProps> = ({ initialConfig, onSuccess })
         })}
       </div>
 
-      {/* Main Wizard Area */}
+      {/* Área do Wizard */}
       <div className="max-w-5xl mx-auto bg-white rounded-[3.5rem] border border-slate-100 shadow-2xl shadow-emerald-950/5 relative overflow-hidden group">
         <div className="h-1.5 w-full bg-slate-50">
           <div className="h-full bg-emerald-500 transition-all duration-700 ease-spring" style={{ width: `${(step/4)*100}%` }} />
@@ -258,7 +256,7 @@ const CreateClient: React.FC<CreateClientProps> = ({ initialConfig, onSuccess })
             <div className="bg-red-50 p-6 rounded-3xl mb-12 border border-red-100 flex items-start gap-4 animate-in slide-in-from-top-4">
               <div className="bg-red-500 p-2 rounded-xl text-white shadow-lg"><AlertCircle size={20}/></div>
               <div>
-                <p className="text-xs font-black text-red-900 uppercase tracking-widest mb-1">Deployment Error</p>
+                <p className="text-xs font-black text-red-900 uppercase tracking-widest mb-1">Erro</p>
                 <p className="text-sm text-red-800/80 font-medium">{error}</p>
               </div>
             </div>
@@ -268,20 +266,20 @@ const CreateClient: React.FC<CreateClientProps> = ({ initialConfig, onSuccess })
             <div className="space-y-10 animate-in fade-in duration-500">
                <div className="grid grid-cols-1 md:grid-cols-2 gap-10">
                   <div className="space-y-3">
-                    <label className="text-xs font-black text-slate-900 uppercase tracking-widest ml-1">Pipeline Identity</label>
-                    <input 
-                      value={name} 
-                      onChange={e => setName(e.target.value)} 
-                      placeholder="Ex: GEOTECH MASTER" 
+                    <label className="text-xs font-black text-slate-900 uppercase tracking-widest ml-1">Nome do Pipeline</label>
+                    <input
+                      value={name}
+                      onChange={e => setName(e.target.value)}
+                      placeholder="Ex: GEOTECH MASTER"
                       className="w-full bg-[#FAFBFC] p-5 rounded-3xl border border-slate-200 outline-none focus:bg-white focus:ring-4 focus:ring-emerald-50 focus:border-emerald-500 transition-all font-bold text-slate-800 placeholder:text-slate-300"
                     />
                   </div>
                   <div className="space-y-3">
-                    <label className="text-xs font-black text-slate-900 uppercase tracking-widest ml-1">Source URL</label>
-                    <input 
-                      value={sheetUrl} 
-                      onChange={e => setSheetUrl(e.target.value)} 
-                      placeholder="https://docs.google.com/..." 
+                    <label className="text-xs font-black text-slate-900 uppercase tracking-widest ml-1">URL da Planilha</label>
+                    <input
+                      value={sheetUrl}
+                      onChange={e => setSheetUrl(e.target.value)}
+                      placeholder="https://docs.google.com/..."
                       className="w-full bg-[#FAFBFC] p-5 rounded-3xl border border-slate-200 outline-none focus:bg-white focus:ring-4 focus:ring-emerald-50 focus:border-emerald-500 transition-all font-bold text-slate-800"
                     />
                   </div>
@@ -294,24 +292,24 @@ const CreateClient: React.FC<CreateClientProps> = ({ initialConfig, onSuccess })
                         <ShieldCheck size={28} />
                      </div>
                      <div className="flex-1">
-                        <h4 className="text-lg font-black text-white tracking-tight">Before continuing — share the sheet</h4>
+                        <h4 className="text-lg font-black text-white tracking-tight">Antes de continuar — compartilhe a planilha</h4>
                         <p className="text-slate-400 text-sm font-medium mt-1 mb-5">
-                          Open the Google Sheet, click <span className="text-white font-bold">Share</span>, and add this email as <span className="text-white font-bold">Viewer</span>:
+                          Abra a planilha, clique em <span className="text-white font-bold">Compartilhar</span> e adicione este e-mail como <span className="text-white font-bold">Leitor</span>:
                         </p>
                         <code className="block bg-white/5 border border-white/10 p-4 rounded-2xl text-emerald-400 font-mono text-xs select-all cursor-pointer hover:bg-white/10 transition-colors">
                           seedsync@seedsync-491513.iam.gserviceaccount.com
                         </code>
-                        <p className="text-slate-600 text-[10px] font-bold uppercase tracking-widest mt-5">Connection will fail if this step is skipped.</p>
+                        <p className="text-slate-600 text-[10px] font-bold uppercase tracking-widest mt-5">A conexão falhará se esta etapa for ignorada.</p>
                      </div>
                   </div>
                </div>
 
-               <button 
-                onClick={handleNextStep1} 
-                disabled={loading} 
+               <button
+                onClick={handleNextStep1}
+                disabled={loading}
                 className="btn-primary w-full shadow-emerald-900/10"
               >
-                {loading ? <Loader2 className="animate-spin" /> : <>Initiate Protocol <ArrowRight size={22} /></>}
+                {loading ? <Loader2 className="animate-spin" /> : <>Continuar <ArrowRight size={22} /></>}
               </button>
             </div>
           )}
@@ -320,11 +318,11 @@ const CreateClient: React.FC<CreateClientProps> = ({ initialConfig, onSuccess })
             <div className="space-y-10 animate-in fade-in slide-in-from-right-10 duration-500">
                <div className="flex items-center justify-between border-b border-slate-50 pb-8">
                   <div>
-                    <h3 className="text-3xl font-black text-slate-900 tracking-tight">Source Nodes</h3>
-                    <p className="text-slate-500 font-medium">Select all tabs to be architected into this pipeline cluster.</p>
+                    <h3 className="text-3xl font-black text-slate-900 tracking-tight">Abas da Planilha</h3>
+                    <p className="text-slate-500 font-medium">Selecione as abas para incluir neste pipeline.</p>
                   </div>
-                  <button 
-                    onClick={handleRefetchWorksheets} 
+                  <button
+                    onClick={handleRefetchWorksheets}
                     className="p-4 rounded-2xl border border-slate-100 bg-white hover:bg-slate-50 text-slate-400 hover:text-emerald-500 transition-all flex items-center gap-2"
                   >
                     <RefreshCw className={loading ? 'animate-spin' : ''} size={18} />
@@ -335,8 +333,8 @@ const CreateClient: React.FC<CreateClientProps> = ({ initialConfig, onSuccess })
                   {worksheets.map(ws => {
                     const isSelected = selectedWorksheets.some(s => s.title === ws.title);
                     return (
-                      <button 
-                        key={ws.id} 
+                      <button
+                        key={ws.id}
                         onClick={() => toggleWorksheet(ws.title)}
                         className={`group p-8 rounded-[2rem] border-2 text-left transition-all relative ${
                           isSelected ? 'bg-emerald-50/20 border-emerald-500' : 'bg-slate-50/30 border-transparent hover:border-slate-200'
@@ -353,11 +351,11 @@ const CreateClient: React.FC<CreateClientProps> = ({ initialConfig, onSuccess })
                </div>
 
                <div className="flex gap-4">
-                  <button 
-                    onClick={handleNextStep2} 
+                  <button
+                    onClick={handleNextStep2}
                     className="btn-primary flex-1 shadow-emerald-900/10"
                   >
-                    Initialize Mapping ({selectedWorksheets.length} nodes)
+                    Mapear Colunas ({selectedWorksheets.length} aba{selectedWorksheets.length !== 1 ? 's' : ''})
                   </button>
                </div>
             </div>
@@ -366,17 +364,17 @@ const CreateClient: React.FC<CreateClientProps> = ({ initialConfig, onSuccess })
           {step === 3 && (
             <div className="space-y-10 animate-in fade-in slide-in-from-right-10 duration-500">
                <div className="border-b border-slate-50 pb-8">
-                 <h3 className="text-3xl font-black text-slate-900 tracking-tight">Data Mapping</h3>
-                 <p className="text-slate-500 font-medium">Define metadata extraction rules applied across selected nodes.</p>
+                 <h3 className="text-3xl font-black text-slate-900 tracking-tight">Mapeamento de Dados</h3>
+                 <p className="text-slate-500 font-medium">Defina as colunas de nome e telefone do lead.</p>
                </div>
 
                <div className="grid grid-cols-1 md:grid-cols-2 gap-10">
                   <div className="space-y-4">
-                    <label className="text-[10px] font-black text-slate-900 uppercase tracking-[0.2em] ml-1">Entity Name Pointer</label>
+                    <label className="text-[10px] font-black text-slate-900 uppercase tracking-[0.2em] ml-1">Coluna de Nome</label>
                     <div className="relative">
-                       <select 
-                        value={nameColumn} 
-                        onChange={e => setNameColumn(e.target.value)} 
+                       <select
+                        value={nameColumn}
+                        onChange={e => setNameColumn(e.target.value)}
                         className="w-full bg-[#FAFBFC] p-5 rounded-3xl border border-slate-200 outline-none appearance-none font-bold text-slate-800 focus:bg-white transition-all shadow-sm"
                       >
                          {columns.map(c => <option key={c} value={c}>{c}</option>)}
@@ -385,11 +383,11 @@ const CreateClient: React.FC<CreateClientProps> = ({ initialConfig, onSuccess })
                     </div>
                   </div>
                   <div className="space-y-4">
-                    <label className="text-[10px] font-black text-slate-900 uppercase tracking-[0.2em] ml-1">Identity/Phone Pointer</label>
+                    <label className="text-[10px] font-black text-slate-900 uppercase tracking-[0.2em] ml-1">Coluna de Telefone</label>
                     <div className="relative">
-                       <select 
-                        value={phoneColumn} 
-                        onChange={e => setPhoneColumn(e.target.value)} 
+                       <select
+                        value={phoneColumn}
+                        onChange={e => setPhoneColumn(e.target.value)}
                         className="w-full bg-[#FAFBFC] p-5 rounded-3xl border border-slate-200 outline-none appearance-none font-bold text-slate-800 focus:bg-white transition-all shadow-sm"
                       >
                          {columns.map(c => <option key={c} value={c}>{c}</option>)}
@@ -399,11 +397,11 @@ const CreateClient: React.FC<CreateClientProps> = ({ initialConfig, onSuccess })
                   </div>
                </div>
 
-               <button 
-                onClick={handleNextStep3} 
+               <button
+                onClick={handleNextStep3}
                 className="btn-primary w-full"
               >
-                Assemble Delivery Mesh
+                Configurar Destinatários
               </button>
             </div>
           )}
@@ -411,23 +409,23 @@ const CreateClient: React.FC<CreateClientProps> = ({ initialConfig, onSuccess })
           {step === 4 && (
             <div className="space-y-10 animate-in fade-in slide-in-from-right-10 duration-500">
                <div className="border-b border-slate-50 pb-8">
-                 <h3 className="text-3xl font-black text-slate-900 tracking-tight">Delivery Hub</h3>
-                 <p className="text-slate-500 font-medium">Relay configuration for outbound lead notifications.</p>
+                 <h3 className="text-3xl font-black text-slate-900 tracking-tight">Destinatários</h3>
+                 <p className="text-slate-500 font-medium">Números de WhatsApp que receberão os leads capturados.</p>
                </div>
 
                <div className="space-y-6 max-h-[500px] overflow-y-auto pr-4 custom-scrollbar">
                   {selectedWorksheets.map((ws, wsIdx) => (
                     <div key={wsIdx} className="bg-[#FAFBFC] p-10 rounded-[3rem] border border-slate-100 relative group/row overflow-hidden">
                        <div className="absolute top-0 right-0 w-24 h-24 bg-emerald-500/5 blur-[40px] opacity-0 group-hover/row:opacity-100 transition-opacity" />
-                       
+
                        <div className="flex flex-col md:flex-row md:items-center justify-between gap-6 mb-8 relative z-10">
                           <div>
-                            <p className="text-[10px] font-black text-emerald-600 uppercase tracking-[0.3em] mb-1">Target Relay</p>
+                            <p className="text-[10px] font-black text-emerald-600 uppercase tracking-[0.3em] mb-1">Aba</p>
                             <h4 className="text-xl font-black text-slate-900 tracking-tight">{ws.title}</h4>
                           </div>
                           {wsIdx === 0 && selectedWorksheets.length > 1 && (
                             <button onClick={() => applyPhonesToAll(0)} className="px-4 py-2 bg-emerald-500 text-white text-[10px] font-black uppercase tracking-widest rounded-xl hover:bg-emerald-600 transition-all shadow-lg shadow-emerald-900/10">
-                              Sync to All Nodes
+                              Aplicar a Todas as Abas
                             </button>
                           )}
                        </div>
@@ -435,10 +433,10 @@ const CreateClient: React.FC<CreateClientProps> = ({ initialConfig, onSuccess })
                        <div className="grid gap-3 relative z-10">
                           {ws.phones.map((phone, idx) => (
                             <div key={idx} className="flex gap-3">
-                               <input 
-                                value={phone} 
-                                onChange={e => updatePhone(wsIdx, idx, e.target.value)} 
-                                placeholder="5599999999999" 
+                               <input
+                                value={phone}
+                                onChange={e => updatePhone(wsIdx, idx, e.target.value)}
+                                placeholder="5599999999999"
                                 className="flex-1 bg-white p-4 rounded-2xl border border-slate-200 outline-none font-mono text-xs font-bold text-slate-800"
                                />
                                <button onClick={() => removePhone(wsIdx, idx)} className="p-4 text-slate-300 hover:text-red-500 hover:bg-red-50 rounded-2xl transition-all">
@@ -447,7 +445,7 @@ const CreateClient: React.FC<CreateClientProps> = ({ initialConfig, onSuccess })
                             </div>
                           ))}
                           <button onClick={() => addPhone(wsIdx)} className="w-full border-2 border-dashed border-slate-200 p-4 rounded-[1.5rem] text-[10px] font-black uppercase tracking-widest text-slate-400 hover:border-emerald-300 hover:text-emerald-500 transition-all">
-                            Add Relay Node
+                            Adicionar Número
                           </button>
                        </div>
                     </div>
@@ -461,11 +459,11 @@ const CreateClient: React.FC<CreateClientProps> = ({ initialConfig, onSuccess })
                            <AlertCircle size={24} />
                         </div>
                         <div>
-                           <h4 className="text-white font-black tracking-tight">Active Failure Safeguard</h4>
-                           <p className="text-slate-500 text-xs font-medium">Automatic ticket creation if delivery relay fails.</p>
+                           <h4 className="text-white font-black tracking-tight">Proteção contra Falhas (ClickUp)</h4>
+                           <p className="text-slate-500 text-xs font-medium">Cria uma tarefa quando todas as tentativas de envio falharem.</p>
                         </div>
                       </div>
-                      <button 
+                      <button
                         onClick={() => setClickupEnabled(!clickupEnabled)}
                         className={`w-14 h-8 rounded-full p-1 transition-colors ${clickupEnabled ? 'bg-emerald-500' : 'bg-slate-700'}`}
                       >
@@ -473,23 +471,23 @@ const CreateClient: React.FC<CreateClientProps> = ({ initialConfig, onSuccess })
                       </button>
                    </div>
                    {clickupEnabled && (
-                     <input 
-                      value={clickupListId} 
-                      onChange={e => setClickupListId(e.target.value)} 
-                      placeholder="ClickUp Object ID" 
+                     <input
+                      value={clickupListId}
+                      onChange={e => setClickupListId(e.target.value)}
+                      placeholder="ID da Lista ClickUp"
                       className="w-full mt-6 bg-white/5 p-5 rounded-2xl border border-white/10 outline-none font-mono text-xs font-bold text-emerald-400 placeholder:text-slate-700"
                      />
                    )}
                </div>
 
                <button onClick={handleSave} className="btn-primary w-full py-6 text-xl">
-                 Finalize & Deploy Protocol
+                 Salvar Pipeline
                </button>
             </div>
           )}
         </div>
       </div>
-      
+
       <p className="text-center font-black text-slate-300 text-[10px] uppercase tracking-[0.5em]">SeedSync Protocol v1.50 // Kernel Live</p>
     </div>
   );

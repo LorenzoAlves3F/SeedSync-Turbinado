@@ -36,12 +36,12 @@ const EditConfig: React.FC<EditConfigProps> = ({ config, onSuccess, onCancel }) 
 
   const handleSave = async () => {
     if (!name.trim() || !sheetId.trim() || !worksheetName.trim()) {
-      setError('Name, Sheet ID and Worksheet are required.');
+      setError('Nome, ID da planilha e aba são obrigatórios.');
       return;
     }
     const cleanPhones = phones.filter(p => p.trim());
     if (!cleanPhones.length) {
-      setError('At least one destination phone is required.');
+      setError('Informe pelo menos um telefone destinatário.');
       return;
     }
 
@@ -61,7 +61,7 @@ const EditConfig: React.FC<EditConfigProps> = ({ config, onSuccess, onCancel }) 
       });
       onSuccess?.();
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Save failed');
+      setError(e instanceof Error ? e.message : 'Falha ao salvar');
     } finally {
       setLoading(false);
     }
@@ -90,16 +90,16 @@ const EditConfig: React.FC<EditConfigProps> = ({ config, onSuccess, onCancel }) 
         <div className="space-y-2">
           <div className="flex items-center gap-2">
             <Settings2 className="text-amber-500" size={16} />
-            <span className="text-[10px] font-black text-amber-600 uppercase tracking-[0.3em]">Quick Edit</span>
+            <span className="text-[10px] font-black text-amber-600 uppercase tracking-[0.3em]">Edição Rápida</span>
           </div>
           <h2 className="text-5xl font-black text-slate-900 tracking-tight leading-none">
-            Edit <span className="text-amber-500 italic">{config.client_id}</span>
+            Editar <span className="text-amber-500 italic">{config.client_id}</span>
           </h2>
-          <p className="text-slate-500 font-medium">Modify parameters directly — no wizard required.</p>
+          <p className="text-slate-500 font-medium">Modificar parâmetros diretamente — sem assistente necessário.</p>
         </div>
         {onCancel && (
           <button onClick={onCancel} className="px-6 py-4 bg-white border border-slate-200 rounded-2xl text-sm font-black text-slate-400 hover:text-slate-600 transition-all">
-            Cancel
+            Cancelar
           </button>
         )}
       </header>
@@ -115,21 +115,21 @@ const EditConfig: React.FC<EditConfigProps> = ({ config, onSuccess, onCancel }) 
 
         {/* Identity */}
         <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-          {field('Pipeline Name', input(name, setName, 'Ex: GEOTECH MASTER'))}
-          {field('Sheet ID or URL', input(sheetId, setSheetId, 'Sheet ID or full URL'))}
+          {field('Nome do Pipeline', input(name, setName, 'Ex: GEOTECH MASTER'))}
+          {field('ID ou URL da Planilha', input(sheetId, setSheetId, 'ID ou URL completa'))}
         </div>
 
-        {field('Worksheet (Tab) Name', input(worksheetName, setWorksheetName, 'Ex: PRODUTORES - 2026'))}
+        {field('Nome da Aba', input(worksheetName, setWorksheetName, 'Ex: PRODUTORES - 2026'))}
 
         {/* Column Mapping */}
         <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-          {field('Name Column', input(nameColumn, setNameColumn, 'NOME'))}
-          {field('Phone Column', input(phoneColumn, setPhoneColumn, 'WHATSAPP'))}
+          {field('Coluna de Nome', input(nameColumn, setNameColumn, 'NOME'))}
+          {field('Coluna de Telefone', input(phoneColumn, setPhoneColumn, 'WHATSAPP'))}
         </div>
 
         {/* Destination Phones */}
         <div className="space-y-3">
-          <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest ml-1">Destination Phones</label>
+          <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest ml-1">Telefones Destinatários</label>
           <div className="space-y-2">
             {phones.map((phone, i) => (
               <div key={i} className="flex gap-2">
@@ -145,7 +145,7 @@ const EditConfig: React.FC<EditConfigProps> = ({ config, onSuccess, onCancel }) 
               </div>
             ))}
             <button onClick={addPhone} className="w-full border-2 border-dashed border-slate-200 p-3.5 rounded-[1.5rem] text-[10px] font-black uppercase tracking-widest text-slate-400 hover:border-emerald-300 hover:text-emerald-500 transition-all flex items-center justify-center gap-2">
-              <Plus size={14} /> Add Phone
+              <Plus size={14} /> Adicionar Número
             </button>
           </div>
         </div>
@@ -154,8 +154,8 @@ const EditConfig: React.FC<EditConfigProps> = ({ config, onSuccess, onCancel }) 
         <div className="bg-slate-900 p-8 rounded-[2.5rem]">
           <div className="flex items-center justify-between gap-6">
             <div>
-              <p className="text-white font-black tracking-tight text-sm">Failure Safeguard (ClickUp)</p>
-              <p className="text-slate-500 text-xs font-medium mt-0.5">Create a task when all retries are exhausted.</p>
+              <p className="text-white font-black tracking-tight text-sm">Proteção contra Falhas (ClickUp)</p>
+              <p className="text-slate-500 text-xs font-medium mt-0.5">Cria uma tarefa quando todas as tentativas falharem.</p>
             </div>
             <button
               onClick={() => setClickupEnabled(!clickupEnabled)}
@@ -168,7 +168,7 @@ const EditConfig: React.FC<EditConfigProps> = ({ config, onSuccess, onCancel }) 
             <input
               value={clickupListId}
               onChange={e => setClickupListId(e.target.value)}
-              placeholder="ClickUp List ID"
+              placeholder="ID da Lista ClickUp"
               className="mt-5 w-full bg-white/5 p-4 rounded-2xl border border-white/10 outline-none font-mono text-xs font-bold text-emerald-400 placeholder:text-slate-700"
             />
           )}
@@ -179,7 +179,7 @@ const EditConfig: React.FC<EditConfigProps> = ({ config, onSuccess, onCancel }) 
           disabled={loading}
           className="btn-primary w-full py-5 text-base flex items-center justify-center gap-3"
         >
-          {loading ? <Loader2 className="animate-spin" size={20} /> : <><Save size={18} /> Save Changes</>}
+          {loading ? <Loader2 className="animate-spin" size={20} /> : <><Save size={18} /> Salvar Alterações</>}
         </button>
       </div>
 

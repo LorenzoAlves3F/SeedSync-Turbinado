@@ -25,7 +25,7 @@ const Dashboard: React.FC = () => {
       setConfigs(cfgs);
       setRecentLogs(logs);
     } catch (e: unknown) {
-      console.error('Dashboard load failed', e);
+      console.error('Falha ao carregar dashboard', e);
     } finally {
       setLoading(false);
     }
@@ -37,9 +37,9 @@ const Dashboard: React.FC = () => {
     try {
       const res = await syncReset();
       addToast(
-        'success', 
-        'Sincronização Iniciada', 
-        `O sistema resetou ${res.cluster_size} nodes com buffer de ${res.buffer_size} linhas.`
+        'success',
+        'Sincronização Iniciada',
+        `O sistema resetou ${res.cluster_size} pipelines com buffer de ${res.buffer_size} linhas.`
       );
       await load();
     } catch (e: unknown) {
@@ -50,9 +50,9 @@ const Dashboard: React.FC = () => {
     }
   };
 
-  useEffect(() => { 
+  useEffect(() => {
     load();
-    const interval = setInterval(load, 30000); // 30s auto-refresh
+    const interval = setInterval(load, 30000);
     return () => clearInterval(interval);
   }, []);
 
@@ -63,7 +63,7 @@ const Dashboard: React.FC = () => {
 
   const formatTime = (iso: string) => {
     const d = new Date(iso);
-    return d.toLocaleTimeString('en-US', { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' });
+    return d.toLocaleTimeString('pt-BR', { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' });
   };
 
   if (loading && configs.length === 0) {
@@ -71,7 +71,7 @@ const Dashboard: React.FC = () => {
       <div className="flex items-center justify-center h-full bg-[#FAFBFC]">
         <div className="flex flex-col items-center gap-4">
            <Loader2 className="animate-spin text-emerald-500" size={48} strokeWidth={1} />
-           <p className="text-xs font-black text-slate-400 uppercase tracking-[0.3em]">Igniting Engine...</p>
+           <p className="text-xs font-black text-slate-400 uppercase tracking-[0.3em]">Carregando...</p>
         </div>
       </div>
     );
@@ -79,17 +79,17 @@ const Dashboard: React.FC = () => {
 
   return (
     <div className="mesh-bg min-h-screen p-10 space-y-12 animate-in fade-in duration-700 pb-24">
-      {/* Dynamic Header */}
+      {/* Cabeçalho */}
       <header className="flex flex-col md:flex-row items-start md:items-end justify-between gap-6">
         <div>
           <div className="flex items-center gap-2 mb-2">
             <ShieldCheck className="text-emerald-500" size={16} />
-            <span className="text-[10px] font-black text-emerald-600 uppercase tracking-[0.3em]">System Operational</span>
+            <span className="text-[10px] font-black text-emerald-600 uppercase tracking-[0.3em]">Sistema Operacional</span>
           </div>
           <h2 className="text-5xl font-black text-slate-900 tracking-tight leading-none mb-1">
-            Engine <span className="text-emerald-500 italic">Overview</span>
+            Visão <span className="text-emerald-500 italic">Geral</span>
           </h2>
-          <p className="text-slate-500 font-medium">Realtime performance monitoring across all ingestion pipelines.</p>
+          <p className="text-slate-500 font-medium">Monitoramento em tempo real de todos os pipelines.</p>
         </div>
         <div className="flex gap-4">
           <button
@@ -107,75 +107,74 @@ const Dashboard: React.FC = () => {
             <span className="relative z-10">{syncing ? 'Sincronizando...' : 'Sincronizar'}</span>
             {!syncing && <div className="absolute inset-0 bg-white/20 translate-y-full group-hover:translate-y-0 transition-transform duration-300" />}
           </button>
-          
+
           <button
             onClick={load}
             disabled={loading}
             className="flex items-center gap-3 px-6 py-4 bg-white border border-slate-200 rounded-2xl text-sm font-black text-slate-700 hover:bg-slate-50 hover:shadow-lg transition-all"
           >
             <RefreshCw size={18} className={loading ? 'animate-spin' : ''} />
-            Refresh
+            Atualizar
           </button>
         </div>
       </header>
 
-      {/* Hero Stats */}
+      {/* Cards de Estatísticas */}
       <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
-        <StatCard 
+        <StatCard
           icon={<Users className="text-slate-900" size={24} />}
           label="Pipelines"
           value={totalClients}
-          subtext={`${activeClients} running locally`}
+          subtext={`${activeClients} ativos`}
           color="bg-white"
         />
-        <StatCard 
+        <StatCard
           icon={<TrendingUp className="text-emerald-600" size={24} />}
-          label="Health"
+          label="Saúde"
           value={`${healthScore}%`}
-          subtext="Operational uptime"
+          subtext="Uptime operacional"
           color="bg-emerald-50/50"
         />
-        <StatCard 
+        <StatCard
           icon={<Zap className="text-amber-500" size={24} />}
           label="Throughput"
           value={recentLogs.length}
-          subtext="Last batch activity"
+          subtext="Atividade recente"
           color="bg-white"
         />
-        <StatCard 
+        <StatCard
           icon={<AlertCircle className={errorsCount > 0 ? "text-red-500" : "text-slate-300"} size={24} />}
-          label="Incidents"
+          label="Incidentes"
           value={errorsCount}
-          subtext="Critical failures"
+          subtext="Falhas críticas"
           color="bg-white"
           caution={errorsCount > 0}
         />
       </div>
 
-      {/* Main Content Area */}
+      {/* Conteúdo Principal */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-8 items-start">
-        
-        {/* Live Terminal */}
+
+        {/* Terminal ao Vivo */}
         <section className="lg:col-span-2 space-y-6">
           <div className="flex items-center justify-between px-2">
              <h3 className="text-sm font-black text-slate-900 uppercase tracking-widest flex items-center gap-3">
                <Activity className="text-emerald-500" size={16} />
-               Live Stream <span className="w-2 h-2 rounded-full bg-emerald-500 animate-ping ml-1" />
+               Stream ao Vivo <span className="w-2 h-2 rounded-full bg-emerald-500 animate-ping ml-1" />
              </h3>
-             <span className="text-[10px] font-bold text-slate-400">FPS: 60.00ms</span>
+             <span className="text-[10px] font-bold text-slate-400">Atualiza a cada 30s</span>
           </div>
-          
+
           <div className="bg-[#0A0D12] rounded-[2.5rem] border border-[#151D2A] p-8 shadow-2xl shadow-emerald-950/10 relative overflow-hidden group">
-            {/* Visual Flair */}
             <div className="absolute top-0 right-0 w-64 h-64 bg-emerald-500/5 blur-[100px] -translate-y-1/2 translate-x-1/2" />
-            
+
             <div className="relative font-mono text-[13px] leading-relaxed space-y-2 overflow-y-auto max-h-[500px] pr-4 custom-scrollbar">
               {recentLogs.length === 0 ? (
                 <div className="py-20 text-center space-y-4">
                    <div className="w-12 h-12 bg-slate-900 rounded-2xl mx-auto flex items-center justify-center border border-slate-800">
                      <Loader2 className="animate-spin text-slate-700" size={20} />
                    </div>
-                   <p className="text-slate-600 font-bold uppercase tracking-widest text-[10px]">Listening for incoming lead payloads...</p>
+                   <p className="text-slate-600 font-bold uppercase tracking-widest text-[10px]">Aguardando novos leads...</p>
                 </div>
               ) : (
                 recentLogs.map((log, idx) => (
@@ -203,11 +202,11 @@ const Dashboard: React.FC = () => {
           </div>
         </section>
 
-        {/* Pipelines Sidecar */}
+        {/* Lista de Pipelines */}
         <section className="space-y-6">
           <h3 className="text-sm font-black text-slate-900 uppercase tracking-widest flex items-center gap-3 px-2">
             <Clock className="text-slate-400" size={16} />
-            Edge Nodes
+            Pipelines Ativos
           </h3>
           <div className="grid gap-3">
             {configs.map(c => (
@@ -223,14 +222,14 @@ const Dashboard: React.FC = () => {
                   </div>
                 </div>
                 <div className="text-right shrink-0 ml-4">
-                  <p className="text-xs font-black text-slate-900">#{c.last_row_index}</p>
-                  <p className="text-[9px] text-slate-400 uppercase font-black tracking-widest">Pointer</p>
+                  <p className="text-xs font-black text-slate-900">#{c.last_row_index + 1}</p>
+                  <p className="text-[9px] text-slate-400 uppercase font-black tracking-widest">Linha</p>
                 </div>
               </div>
             ))}
           </div>
           <button className="w-full py-4 text-xs font-black text-slate-400 uppercase tracking-[0.2em] border-2 border-dashed border-slate-200 rounded-3xl hover:border-emerald-300 hover:text-emerald-500 transition-all">
-            View All Pipelines
+            Ver Todos os Pipelines
           </button>
         </section>
       </div>
@@ -261,7 +260,6 @@ const StatCard: React.FC<{
         </p>
       </div>
     </div>
-    {/* Background Pattern */}
     <div className="absolute -bottom-10 -right-10 opacity-[0.03] rotate-12 group-hover:rotate-6 transition-transform">
       {icon}
     </div>

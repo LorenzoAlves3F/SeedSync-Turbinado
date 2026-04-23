@@ -50,7 +50,7 @@ const ClientList: React.FC<ClientListProps> = ({ onViewLogs, onEdit }) => {
   };
 
   const handleDelete = async (clientId: string) => {
-    if (!confirm(`Attention: Permanent deletion of "${clientId}". Continue?`)) return;
+    if (!confirm(`Atenção: exclusão permanente de "${clientId}". Continuar?`)) return;
     try {
       await deleteConfig(clientId);
       setConfigs(prev => prev.filter(x => x.client_id !== clientId));
@@ -60,7 +60,7 @@ const ClientList: React.FC<ClientListProps> = ({ onViewLogs, onEdit }) => {
   };
 
   const openResetCursor = (c: SourceConfig) => {
-    setResetInputs(prev => ({ ...prev, [c.client_id]: String(c.last_row_index) }));
+    setResetInputs(prev => ({ ...prev, [c.client_id]: String(c.last_row_index + 1) }));
     setResetting(c.client_id);
   };
 
@@ -70,8 +70,9 @@ const ClientList: React.FC<ClientListProps> = ({ onViewLogs, onEdit }) => {
   };
 
   const confirmReset = async (clientId: string) => {
-    const rowIndex = parseInt(resetInputs[clientId] ?? '0', 10);
-    if (isNaN(rowIndex) || rowIndex < 0) return;
+    const lineNumber = parseInt(resetInputs[clientId] ?? '1', 10);
+    if (isNaN(lineNumber) || lineNumber < 1) return;
+    const rowIndex = lineNumber - 1;
     try {
       await resetCursor(clientId, rowIndex);
       setConfigs(prev =>
@@ -98,12 +99,12 @@ const ClientList: React.FC<ClientListProps> = ({ onViewLogs, onEdit }) => {
         <div>
           <div className="flex items-center gap-2 mb-2">
             <Database className="text-emerald-500" size={14} />
-            <span className="text-[10px] font-black text-emerald-600 uppercase tracking-[0.3em]">Master Registry</span>
+            <span className="text-[10px] font-black text-emerald-600 uppercase tracking-[0.3em]">Registro Geral</span>
           </div>
           <h2 className="text-5xl font-black text-slate-900 tracking-tight leading-none">
-            Active <span className="text-emerald-500 italic">Pipelines</span>
+            Pipelines <span className="text-emerald-500 italic">Ativos</span>
           </h2>
-          <p className="text-slate-500 font-medium mt-2">Managing {configs.length} nodes · {activeCount} online in cluster.</p>
+          <p className="text-slate-500 font-medium mt-2">Gerenciando {configs.length} pipelines · {activeCount} ativos no cluster.</p>
         </div>
 
         <div className="flex items-center gap-4">
@@ -112,7 +113,7 @@ const ClientList: React.FC<ClientListProps> = ({ onViewLogs, onEdit }) => {
             <input
               value={search}
               onChange={e => setSearch(e.target.value)}
-              placeholder="Search pipelines..."
+              placeholder="Buscar pipelines..."
               className="pl-14 pr-6 py-4 rounded-[1.5rem] border border-slate-200 bg-white/80 focus:bg-white outline-none w-80 transition-all font-bold text-sm focus:ring-4 focus:ring-emerald-50"
             />
           </div>
@@ -129,12 +130,12 @@ const ClientList: React.FC<ClientListProps> = ({ onViewLogs, onEdit }) => {
       {loading && configs.length === 0 ? (
         <div className="flex flex-col items-center justify-center py-32 gap-4">
            <Loader2 className="animate-spin text-emerald-500 opacity-20" size={64} strokeWidth={1} />
-           <p className="text-xs font-black text-slate-400 uppercase tracking-[0.4em]">Optimizing Metadata...</p>
+           <p className="text-xs font-black text-slate-400 uppercase tracking-[0.4em]">Carregando...</p>
         </div>
       ) : filtered.length === 0 ? (
         <div className="bg-white/60 backdrop-blur-xl rounded-[3rem] p-24 text-center border border-white/40 shadow-2xl">
-          <p className="text-2xl font-black text-slate-900 tracking-tighter mb-2">No nodes found matching your query.</p>
-          <p className="text-slate-500 font-medium tracking-tight">Try a different identifier or deploy a new node.</p>
+          <p className="text-2xl font-black text-slate-900 tracking-tighter mb-2">Nenhum pipeline encontrado.</p>
+          <p className="text-slate-500 font-medium tracking-tight">Tente outro identificador ou crie um novo pipeline.</p>
         </div>
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
@@ -151,7 +152,7 @@ const ClientList: React.FC<ClientListProps> = ({ onViewLogs, onEdit }) => {
                   c.active ? 'bg-emerald-500/10 text-emerald-600' : 'bg-slate-100 text-slate-400'
                 }`}>
                   <div className={`w-1.5 h-1.5 rounded-full ${c.active ? 'bg-emerald-500 animate-pulse' : 'bg-slate-300'}`} />
-                  {c.active ? 'OPERATIONAL' : 'OFFLINE'}
+                  {c.active ? 'ATIVO' : 'INATIVO'}
                 </div>
 
                 <div className="flex gap-1.5 translate-x-2">
@@ -179,7 +180,7 @@ const ClientList: React.FC<ClientListProps> = ({ onViewLogs, onEdit }) => {
               <div className="grid grid-cols-2 gap-4 pt-6 border-t border-slate-50 mb-8">
                  <div className="space-y-1">
                     <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest flex items-center gap-1.5">
-                      <Hash size={10} /> Row Cursor
+                      <Hash size={10} /> Linha Atual
                     </p>
                     {resetting === c.client_id ? (
                       <div className="flex items-center gap-1.5">
@@ -201,10 +202,10 @@ const ClientList: React.FC<ClientListProps> = ({ onViewLogs, onEdit }) => {
                       </div>
                     ) : (
                       <div className="flex items-center gap-2">
-                        <p className="text-sm font-black text-slate-800">{c.last_row_index}</p>
+                        <p className="text-sm font-black text-slate-800">{c.last_row_index + 1}</p>
                         <button
                           onClick={() => openResetCursor(c)}
-                          title="Resend from row…"
+                          title="Reenviar a partir da linha…"
                           className="p-1 text-slate-300 hover:text-amber-500 hover:bg-amber-50 rounded-lg transition-all opacity-0 group-hover:opacity-100"
                         >
                           <RotateCcw size={12} />
@@ -214,9 +215,9 @@ const ClientList: React.FC<ClientListProps> = ({ onViewLogs, onEdit }) => {
                  </div>
                  <div className="space-y-1">
                     <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest flex items-center gap-1.5">
-                      <Phone size={10} /> Recipients
+                      <Phone size={10} /> Destinatários
                     </p>
-                    <p className="text-sm font-black text-slate-800">{c.destination_phones?.length || 0} nodes</p>
+                    <p className="text-sm font-black text-slate-800">{c.destination_phones?.length || 0}</p>
                  </div>
               </div>
 
@@ -227,7 +228,7 @@ const ClientList: React.FC<ClientListProps> = ({ onViewLogs, onEdit }) => {
                   target="_blank" rel="noreferrer"
                   className="px-5 py-3 rounded-2xl bg-slate-900 text-white text-[10px] font-black uppercase tracking-widest hover:bg-black transition-all flex items-center gap-2 shadow-lg"
                 >
-                  Source <ExternalLink size={12} />
+                  Planilha <ExternalLink size={12} />
                 </a>
 
                 <button
@@ -238,7 +239,7 @@ const ClientList: React.FC<ClientListProps> = ({ onViewLogs, onEdit }) => {
                       : 'border-emerald-500/10 text-emerald-500 hover:bg-emerald-50'
                   }`}
                 >
-                  {toggling === c.client_id ? 'WAIT...' : c.active ? 'Shutdown' : 'Startup'}
+                  {toggling === c.client_id ? 'AGUARDE...' : c.active ? 'Desativar' : 'Ativar'}
                 </button>
               </div>
             </div>
