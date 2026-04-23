@@ -43,7 +43,7 @@ DRY_RUN = os.getenv("DRY_RUN", "false").strip().lower() == "true"
 # Max new leads per client per cycle before flood protection kicks in.
 # Exceeding this advances the cursor silently instead of sending notifications.
 # Prevents mass-sends when a cursor gets stuck (e.g. after a DB schema issue).
-FLOOD_PROTECTION_THRESHOLD = int(os.getenv("FLOOD_PROTECTION_THRESHOLD", "30"))
+FLOOD_PROTECTION_THRESHOLD = int(os.getenv("FLOOD_PROTECTION_THRESHOLD", "5"))
 NOTIFY_OVERRIDE_PHONE = os.getenv("NOTIFY_OVERRIDE_PHONE", "").strip()
 NOTIFY_OVERRIDE_LIST = [p.strip() for p in NOTIFY_OVERRIDE_PHONE.split(",") if p.strip()] if NOTIFY_OVERRIDE_PHONE else []
 
