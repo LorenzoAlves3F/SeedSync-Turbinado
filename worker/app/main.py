@@ -1,5 +1,4 @@
 import asyncio
-import hashlib
 import json
 import logging
 import os
@@ -109,43 +108,6 @@ async def update_cursor(config_id: str, new_index: int):
         log("scheduler", "cursor_update_exception", config_id=config_id, new_index=new_index, error=str(e))
 
 
-async def _has_client_history(client_id: str) -> bool:
-    """Returns True if this client has any entries in ingestion_log (including init sentinels)."""
-    try:
-        r = await http_client.get(
-            f"{SUPABASE_URL}/rest/v1/ingestion_log",
-            headers=SUPABASE_HEADERS,
-            params={"client_id": f"eq.{client_id}", "limit": "1", "select": "client_id"}
-        )
-        if r.is_success:
-            return len(r.json()) > 0
-        return True  # On error, assume history exists — process normally (safe default)
-    except Exception:
-        return True
-
-
-async def _mark_client_initialized(client_id: str, skipped: int):
-    """Write a sentinel to ingestion_log so fresh-start guard doesn't re-trigger."""
-    try:
-        fp = hashlib.sha256(
-            f"__init__{client_id}__{datetime.now(timezone.utc).isoformat()}".encode()
-        ).hexdigest()
-        await http_client.post(
-            f"{SUPABASE_URL}/rest/v1/ingestion_log",
-            headers=SUPABASE_HEADERS,
-            json={
-                "client_id": client_id,
-                "row_fingerprint": fp,
-                "raw_payload": {"_init": True, "skipped_rows": skipped},
-                "status": "initialized",
-                "whatsapp_status": "skipped",
-                "processed_at": datetime.now(timezone.utc).isoformat(),
-            }
-        )
-    except Exception as e:
-        log("scheduler", "init_sentinel_failed", client=client_id, error=str(e))
-
-
 async def fast_forward_new_clients(
     configs: list[dict],
     credentials: dict[str, str],
@@ -215,19 +177,6 @@ async def process_client(conf: Dict[str, Any], credentials: dict[str, str], zapi
                 # 1. Fetch new rows strictly forward
                 rows, header_sample = await fetch_new_rows(sheet_id, worksheet, last_index, sa_file=sa_file)
                 if not rows:
-                    return 0
-
-                # 1b. Fresh-start guard: on a new deployment the ingestion_log is
-                # empty, so dedup won't catch historical leads. If this client has
-                # no history at all, fast-forward the cursor to the current sheet
-                # end and write a sentinel — don't send old leads as notifications.
-                if not await _has_client_history(client_id):
-                    start_row_actual = max(2, last_index + 2)
-                    new_index = max(last_index, start_row_actual + len(rows) - 2)
-                    await update_cursor(conf["id"], new_index)
-                    await _mark_client_initialized(client_id, len(rows))
-                    log("scheduler", "cursor_initialized", client=client_id,
-                        skipped=len(rows), new_index=new_index)
                     return 0
 
                 # 2. Ensure schema exists

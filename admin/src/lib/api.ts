@@ -33,6 +33,7 @@ export interface SourceConfig {
   clickup_list_id: string | null;
   active: boolean;
   last_row_index: number;
+  google_sa_id: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -70,6 +71,9 @@ export const updateConfig = (clientId: string, data: Partial<SourceConfig>) =>
 
 export const deleteConfig = (clientId: string) =>
   api.delete(`/configs/${clientId}`).then(r => r.data);
+
+export const resetCursor = (clientId: string, rowIndex: number) =>
+  api.post<SourceConfig>(`/configs/${clientId}/reset-cursor`, { row_index: rowIndex }).then(r => r.data);
 
 // ─── Bulk Operations ─────────────────────────────────────
 

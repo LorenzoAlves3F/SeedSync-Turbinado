@@ -74,6 +74,10 @@ class GoogleServiceAccount(BaseModel):
     sa_file: str  # Absolute path on VPS, e.g. /opt/apps/seedsync/worker/credentials/agro.json
 
 
+class ResetCursorRequest(BaseModel):
+    row_index: int
+
+
 # ──────────────────── Health ────────────────────
 
 @app.get("/health")
@@ -153,6 +157,26 @@ async def update_config(client_id: str, patch: ClientConfigPatch):
         headers=headers,
         params={"client_id": f"eq.{client_id}"},
         json=payload,
+    )
+    if not r.is_success:
+        raise HTTPException(status_code=r.status_code, detail=r.text)
+    data = r.json()
+    if not data:
+        raise HTTPException(status_code=404, detail="Client not found")
+    return data[0]
+
+
+@app.post("/configs/{client_id}/reset-cursor")
+async def reset_cursor(client_id: str, body: ResetCursorRequest):
+    """Move last_row_index to the given row, causing the worker to re-ingest from that point."""
+    if body.row_index < 0:
+        raise HTTPException(status_code=400, detail="row_index must be >= 0")
+    headers = {**SUPABASE_HEADERS, "Prefer": "return=representation"}
+    r = await http_client.patch(
+        f"{SUPABASE_URL}/rest/v1/source_configs",
+        headers=headers,
+        params={"client_id": f"eq.{client_id}"},
+        json={"last_row_index": body.row_index},
     )
     if not r.is_success:
         raise HTTPException(status_code=r.status_code, detail=r.text)

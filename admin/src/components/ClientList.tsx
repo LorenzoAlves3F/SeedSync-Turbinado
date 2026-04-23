@@ -2,10 +2,10 @@ import React, { useEffect, useState } from 'react';
 import {
   Search, Trash2, ExternalLink,
   Loader2, RefreshCw, FileText, Settings2,
-  Database, Phone, Hash
+  Database, Phone, Hash, RotateCcw, Check, X
 } from 'lucide-react';
 
-import { fetchConfigs, updateConfig, deleteConfig, type SourceConfig } from '../lib/api';
+import { fetchConfigs, updateConfig, deleteConfig, resetCursor, type SourceConfig } from '../lib/api';
 
 interface ClientListProps {
   onViewLogs?: (clientId: string) => void;
@@ -17,6 +17,8 @@ const ClientList: React.FC<ClientListProps> = ({ onViewLogs, onEdit }) => {
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
   const [toggling, setToggling] = useState<string | null>(null);
+  const [resetting, setResetting] = useState<string | null>(null);
+  const [resetInputs, setResetInputs] = useState<Record<string, string>>({});
 
   const load = async () => {
     setLoading(true);
@@ -57,6 +59,31 @@ const ClientList: React.FC<ClientListProps> = ({ onViewLogs, onEdit }) => {
     }
   };
 
+  const openResetCursor = (c: SourceConfig) => {
+    setResetInputs(prev => ({ ...prev, [c.client_id]: String(c.last_row_index) }));
+    setResetting(c.client_id);
+  };
+
+  const cancelReset = (clientId: string) => {
+    setResetting(null);
+    setResetInputs(prev => { const n = { ...prev }; delete n[clientId]; return n; });
+  };
+
+  const confirmReset = async (clientId: string) => {
+    const rowIndex = parseInt(resetInputs[clientId] ?? '0', 10);
+    if (isNaN(rowIndex) || rowIndex < 0) return;
+    try {
+      await resetCursor(clientId, rowIndex);
+      setConfigs(prev =>
+        prev.map(x => x.client_id === clientId ? { ...x, last_row_index: rowIndex } : x)
+      );
+    } catch (e) {
+      console.error('Reset cursor failed', e);
+    } finally {
+      cancelReset(clientId);
+    }
+  };
+
   const filtered = configs.filter(c =>
     c.name.toLowerCase().includes(search.toLowerCase()) ||
     c.client_id.toLowerCase().includes(search.toLowerCase())
@@ -78,7 +105,7 @@ const ClientList: React.FC<ClientListProps> = ({ onViewLogs, onEdit }) => {
           </h2>
           <p className="text-slate-500 font-medium mt-2">Managing {configs.length} nodes · {activeCount} online in cluster.</p>
         </div>
-        
+
         <div className="flex items-center gap-4">
           <div className="relative group">
             <Search size={18} className="absolute left-5 top-1/2 -translate-y-1/2 text-slate-400 group-focus-within:text-emerald-500 transition-colors" />
@@ -126,7 +153,7 @@ const ClientList: React.FC<ClientListProps> = ({ onViewLogs, onEdit }) => {
                   <div className={`w-1.5 h-1.5 rounded-full ${c.active ? 'bg-emerald-500 animate-pulse' : 'bg-slate-300'}`} />
                   {c.active ? 'OPERATIONAL' : 'OFFLINE'}
                 </div>
-                
+
                 <div className="flex gap-1.5 translate-x-2">
                    <button onClick={() => onViewLogs?.(c.client_id)} className="p-2.5 rounded-xl text-slate-400 hover:text-emerald-500 hover:bg-emerald-50 transition-all">
                      <FileText size={18} />
@@ -154,7 +181,36 @@ const ClientList: React.FC<ClientListProps> = ({ onViewLogs, onEdit }) => {
                     <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest flex items-center gap-1.5">
                       <Hash size={10} /> Row Cursor
                     </p>
-                    <p className="text-sm font-black text-slate-800">{c.last_row_index}</p>
+                    {resetting === c.client_id ? (
+                      <div className="flex items-center gap-1.5">
+                        <input
+                          type="number"
+                          min={0}
+                          value={resetInputs[c.client_id] ?? ''}
+                          onChange={e => setResetInputs(prev => ({ ...prev, [c.client_id]: e.target.value }))}
+                          onKeyDown={e => { if (e.key === 'Enter') confirmReset(c.client_id); if (e.key === 'Escape') cancelReset(c.client_id); }}
+                          autoFocus
+                          className="w-16 text-xs font-black text-slate-800 bg-slate-50 border border-slate-200 rounded-xl px-2 py-1 outline-none focus:border-emerald-400"
+                        />
+                        <button onClick={() => confirmReset(c.client_id)} className="p-1 text-emerald-500 hover:bg-emerald-50 rounded-lg transition-all">
+                          <Check size={14} />
+                        </button>
+                        <button onClick={() => cancelReset(c.client_id)} className="p-1 text-slate-300 hover:text-red-400 hover:bg-red-50 rounded-lg transition-all">
+                          <X size={14} />
+                        </button>
+                      </div>
+                    ) : (
+                      <div className="flex items-center gap-2">
+                        <p className="text-sm font-black text-slate-800">{c.last_row_index}</p>
+                        <button
+                          onClick={() => openResetCursor(c)}
+                          title="Resend from row…"
+                          className="p-1 text-slate-300 hover:text-amber-500 hover:bg-amber-50 rounded-lg transition-all opacity-0 group-hover:opacity-100"
+                        >
+                          <RotateCcw size={12} />
+                        </button>
+                      </div>
+                    )}
                  </div>
                  <div className="space-y-1">
                     <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest flex items-center gap-1.5">
@@ -166,19 +222,19 @@ const ClientList: React.FC<ClientListProps> = ({ onViewLogs, onEdit }) => {
 
               {/* Quick Actions */}
               <div className="mt-auto flex items-center justify-between gap-3 pt-6">
-                <a 
+                <a
                   href={`https://docs.google.com/spreadsheets/d/${c.sheet_id}/edit`}
                   target="_blank" rel="noreferrer"
                   className="px-5 py-3 rounded-2xl bg-slate-900 text-white text-[10px] font-black uppercase tracking-widest hover:bg-black transition-all flex items-center gap-2 shadow-lg"
                 >
                   Source <ExternalLink size={12} />
                 </a>
-                
+
                 <button
                   onClick={() => handleToggle(c)}
                   className={`flex-1 py-3 rounded-2xl border-2 font-black text-[10px] uppercase tracking-widest transition-all ${
-                    c.active 
-                      ? 'border-red-500/10 text-red-500 hover:bg-red-50' 
+                    c.active
+                      ? 'border-red-500/10 text-red-500 hover:bg-red-50'
                       : 'border-emerald-500/10 text-emerald-500 hover:bg-emerald-50'
                   }`}
                 >

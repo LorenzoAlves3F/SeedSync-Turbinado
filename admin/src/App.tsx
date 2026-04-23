@@ -2,6 +2,7 @@ import { useState, useCallback } from 'react';
 import Sidebar from './components/Sidebar';
 import Dashboard from './components/Dashboard';
 import CreateClient from './components/CreateClient';
+import EditConfig from './components/EditConfig';
 import ClientList from './components/ClientList';
 import LogViewer from './components/LogViewer';
 import type { SourceConfig } from './lib/api';
@@ -36,9 +37,10 @@ function App() {
           <CreateClient onSuccess={() => setActiveTab('clients')} />
         )}
         {activeTab === 'edit-client' && editingConfig && (
-          <CreateClient
-            initialConfig={editingConfig}
+          <EditConfig
+            config={editingConfig}
             onSuccess={handleEditSuccess}
+            onCancel={handleEditSuccess}
           />
         )}
         {activeTab === 'clients' && (
