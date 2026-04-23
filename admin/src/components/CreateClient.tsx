@@ -480,6 +480,14 @@ const CreateClient: React.FC<CreateClientProps> = ({ initialConfig, onSuccess })
                    )}
                </div>
 
+               <div className="bg-emerald-500/10 border border-emerald-500/20 rounded-[2rem] p-6 flex items-start gap-4">
+                 <ShieldCheck className="text-emerald-500 shrink-0 mt-0.5" size={20} />
+                 <div>
+                   <p className="text-sm font-black text-emerald-700">Leads históricos serão ignorados</p>
+                   <p className="text-xs text-emerald-700/70 font-medium mt-1">No primeiro ciclo, o sistema avança automaticamente o cursor para o final da planilha. Apenas leads adicionados <span className="font-black">após a ativação</span> serão processados e notificados.</p>
+                 </div>
+               </div>
+
                <button onClick={handleSave} className="btn-primary w-full py-6 text-xl">
                  Salvar Pipeline
                </button>
