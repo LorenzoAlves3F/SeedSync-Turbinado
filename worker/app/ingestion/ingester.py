@@ -293,9 +293,10 @@ class LeadIngester:
 
             send_res = await whatsapp.send_text(dest_phone, msg)
             if send_res.success:
-                # Only send contact card if the lead's own phone is a valid mobile
-                if lead_res.valid:
-                    await whatsapp.send_contact(dest_phone, name_raw or "Lead", lead_res.phone)
+                # Valid BR number → use normalized form; foreign/invalid → raw digits (best-effort)
+                card_phone = lead_res.phone if lead_res.valid else re.sub(r"[^\d]", "", str(phone_raw))
+                if card_phone and len(card_phone) >= 8:
+                    await whatsapp.send_contact(dest_phone, name_raw or "Lead", card_phone)
                 if send_res.message_id:
                     await self._patch_log_message_id(fingerprint, send_res.message_id)
                 statuses.append("sent")
