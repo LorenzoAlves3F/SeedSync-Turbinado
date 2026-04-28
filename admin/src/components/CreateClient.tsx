@@ -1,12 +1,12 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   LayoutPanelLeft,
   ArrowRight, Loader2, RefreshCw,
   X, MessageSquare, AlertCircle, CheckSquare,
-  Globe, Fingerprint, Zap, ShieldCheck
+  Globe, Fingerprint, Zap, ShieldCheck, Webhook
 } from 'lucide-react';
 import axios from 'axios';
-import api, { type SourceConfig } from '../lib/api';
+import api, { fetchContas, type SourceConfig, type Conta } from '../lib/api';
 interface CreateClientProps {
   initialConfig?: SourceConfig | null;
   onSuccess?: () => void;
@@ -16,6 +16,18 @@ const CreateClient: React.FC<CreateClientProps> = ({ initialConfig, onSuccess })
   const [step, setStep] = useState(1);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+
+  const [mode, setMode] = useState<'sheet' | 'webhook'>(
+    initialConfig?.ingestion_mode === 'webhook' ? 'webhook' : 'sheet'
+  );
+  const [contas, setContas] = useState<Conta[]>([]);
+  const [selectedContaId, setSelectedContaId] = useState<string>(
+    initialConfig?.conta_id != null ? String(initialConfig.conta_id) : ''
+  );
+
+  useEffect(() => {
+    fetchContas().then(setContas).catch(() => {});
+  }, []);
 
   const [name, setName] = useState(initialConfig?.name || '');
   const [sheetUrl, setSheetUrl] = useState(initialConfig ? `https://docs.google.com/spreadsheets/d/${initialConfig.sheet_id}/edit` : '');
@@ -40,8 +52,27 @@ const CreateClient: React.FC<CreateClientProps> = ({ initialConfig, onSuccess })
   };
 
   const handleNextStep1 = async () => {
+    if (!name.trim()) {
+      setError('Informe o nome do pipeline.');
+      return;
+    }
+
+    // Webhook mode: skip sheet connection, go straight to destinations
+    if (mode === 'webhook') {
+      if (!selectedContaId) {
+        setError('Selecione uma conta para o pipeline webhook.');
+        return;
+      }
+      if (selectedWorksheets.length === 0) {
+        setSelectedWorksheets([{ title: 'Webhook', phones: [''] }]);
+      }
+      setError('');
+      setStep(4);
+      return;
+    }
+
     const id = extractId(sheetUrl);
-    if (!id || !name.trim()) {
+    if (!id) {
       setError('Verifique o Nome e a URL da planilha.');
       return;
     }
@@ -147,23 +178,47 @@ const CreateClient: React.FC<CreateClientProps> = ({ initialConfig, onSuccess })
     setError('');
     try {
       if (initialConfig) {
-        const payload = {
+        const payload = mode === 'webhook'
+          ? {
+              name,
+              ingestion_mode: 'webhook',
+              conta_id: selectedContaId ? parseInt(selectedContaId) : null,
+              destination_phones: selectedWorksheets[0].phones.filter(p => p.trim()),
+              clickup_enabled: clickupEnabled,
+              clickup_list_id: clickupListId || null,
+            }
+          : {
+              name,
+              ingestion_mode: 'sheet',
+              sheet_id: sheetId,
+              worksheet_name: selectedWorksheets[0].title,
+              name_column: nameColumn,
+              phone_column: phoneColumn,
+              required_columns: [nameColumn, phoneColumn],
+              destination_phones: selectedWorksheets[0].phones.filter(p => p.trim()),
+              clickup_enabled: clickupEnabled,
+              clickup_list_id: clickupListId || null,
+            };
+        await api.patch(`/configs/${initialConfig.client_id}`, payload);
+      } else if (mode === 'webhook') {
+        await api.post('/configs', {
           name,
-          sheet_id: sheetId,
-          worksheet_name: selectedWorksheets[0].title,
-          name_column: nameColumn,
-          phone_column: phoneColumn,
-          required_columns: [nameColumn, phoneColumn],
+          ingestion_mode: 'webhook',
+          conta_id: selectedContaId ? parseInt(selectedContaId) : null,
+          sheet_id: '',
+          worksheet_name: '',
           destination_phones: selectedWorksheets[0].phones.filter(p => p.trim()),
           clickup_enabled: clickupEnabled,
-          clickup_list_id: clickupListId || null
-        };
-        await api.patch(`/configs/${initialConfig.client_id}`, payload);
+          clickup_list_id: clickupListId || null,
+          client_id: '',
+          active: true,
+        });
       } else {
         const promises = selectedWorksheets.map(sws => {
           const tabName = selectedWorksheets.length > 1 ? `${name} - ${sws.title}` : name;
           return api.post('/configs', {
             name: tabName,
+            ingestion_mode: 'sheet',
             sheet_id: sheetId,
             worksheet_name: sws.title,
             name_column: nameColumn,
@@ -173,7 +228,7 @@ const CreateClient: React.FC<CreateClientProps> = ({ initialConfig, onSuccess })
             clickup_enabled: clickupEnabled,
             clickup_list_id: clickupListId || null,
             client_id: '',
-            active: true
+            active: true,
           });
         });
         await Promise.all(promises);
@@ -212,7 +267,10 @@ const CreateClient: React.FC<CreateClientProps> = ({ initialConfig, onSuccess })
         <div className="flex items-center gap-4">
              {step > 1 && (
                 <button
-                  onClick={() => setStep(step - 1)}
+                  onClick={() => {
+                    if (mode === 'webhook' && step === 4) setStep(1);
+                    else setStep(step - 1);
+                  }}
                   className="px-6 py-4 bg-white border border-slate-200 rounded-2xl text-sm font-black text-slate-400 hover:text-slate-600 transition-all"
                 >
                   Voltar
@@ -264,6 +322,47 @@ const CreateClient: React.FC<CreateClientProps> = ({ initialConfig, onSuccess })
 
           {step === 1 && (
             <div className="space-y-10 animate-in fade-in duration-500">
+               {/* Mode Toggle */}
+               <div className="space-y-3">
+                 <label className="text-xs font-black text-slate-900 uppercase tracking-widest ml-1">Modo de Fonte</label>
+                 <div className="grid grid-cols-2 gap-4">
+                   <button
+                     type="button"
+                     onClick={() => setMode('sheet')}
+                     className={`p-5 rounded-3xl border-2 flex items-center gap-4 transition-all ${
+                       mode === 'sheet'
+                         ? 'border-emerald-500 bg-emerald-50/50'
+                         : 'border-slate-200 bg-[#FAFBFC] hover:border-slate-300'
+                     }`}
+                   >
+                     <div className={`w-10 h-10 rounded-2xl flex items-center justify-center shrink-0 ${mode === 'sheet' ? 'bg-emerald-500 text-white' : 'bg-slate-100 text-slate-400'}`}>
+                       <LayoutPanelLeft size={18} />
+                     </div>
+                     <div className="text-left">
+                       <p className={`text-xs font-black uppercase tracking-widest ${mode === 'sheet' ? 'text-emerald-700' : 'text-slate-500'}`}>Planilha</p>
+                       <p className="text-[10px] text-slate-400 font-medium">Google Sheets</p>
+                     </div>
+                   </button>
+                   <button
+                     type="button"
+                     onClick={() => setMode('webhook')}
+                     className={`p-5 rounded-3xl border-2 flex items-center gap-4 transition-all ${
+                       mode === 'webhook'
+                         ? 'border-violet-500 bg-violet-50/50'
+                         : 'border-slate-200 bg-[#FAFBFC] hover:border-slate-300'
+                     }`}
+                   >
+                     <div className={`w-10 h-10 rounded-2xl flex items-center justify-center shrink-0 ${mode === 'webhook' ? 'bg-violet-500 text-white' : 'bg-slate-100 text-slate-400'}`}>
+                       <Webhook size={18} />
+                     </div>
+                     <div className="text-left">
+                       <p className={`text-xs font-black uppercase tracking-widest ${mode === 'webhook' ? 'text-violet-700' : 'text-slate-500'}`}>Webhook</p>
+                       <p className="text-[10px] text-slate-400 font-medium">Make / Facebook</p>
+                     </div>
+                   </button>
+                 </div>
+               </div>
+
                <div className="grid grid-cols-1 md:grid-cols-2 gap-10">
                   <div className="space-y-3">
                     <label className="text-xs font-black text-slate-900 uppercase tracking-widest ml-1">Nome do Pipeline</label>
@@ -274,35 +373,75 @@ const CreateClient: React.FC<CreateClientProps> = ({ initialConfig, onSuccess })
                       className="w-full bg-[#FAFBFC] p-5 rounded-3xl border border-slate-200 outline-none focus:bg-white focus:ring-4 focus:ring-emerald-50 focus:border-emerald-500 transition-all font-bold text-slate-800 placeholder:text-slate-300"
                     />
                   </div>
-                  <div className="space-y-3">
-                    <label className="text-xs font-black text-slate-900 uppercase tracking-widest ml-1">URL da Planilha</label>
-                    <input
-                      value={sheetUrl}
-                      onChange={e => setSheetUrl(e.target.value)}
-                      placeholder="https://docs.google.com/..."
-                      className="w-full bg-[#FAFBFC] p-5 rounded-3xl border border-slate-200 outline-none focus:bg-white focus:ring-4 focus:ring-emerald-50 focus:border-emerald-500 transition-all font-bold text-slate-800"
-                    />
-                  </div>
+
+                  {mode === 'sheet' ? (
+                    <div className="space-y-3">
+                      <label className="text-xs font-black text-slate-900 uppercase tracking-widest ml-1">URL da Planilha</label>
+                      <input
+                        value={sheetUrl}
+                        onChange={e => setSheetUrl(e.target.value)}
+                        placeholder="https://docs.google.com/..."
+                        className="w-full bg-[#FAFBFC] p-5 rounded-3xl border border-slate-200 outline-none focus:bg-white focus:ring-4 focus:ring-emerald-50 focus:border-emerald-500 transition-all font-bold text-slate-800"
+                      />
+                    </div>
+                  ) : (
+                    <div className="space-y-3">
+                      <label className="text-xs font-black text-slate-900 uppercase tracking-widest ml-1">Conta</label>
+                      <div className="relative">
+                        <select
+                          value={selectedContaId}
+                          onChange={e => setSelectedContaId(e.target.value)}
+                          className="w-full bg-[#FAFBFC] p-5 rounded-3xl border border-slate-200 outline-none appearance-none font-bold text-slate-800 focus:bg-white transition-all"
+                        >
+                          <option value="">Selecione uma conta...</option>
+                          {contas.map(c => (
+                            <option key={c.id} value={String(c.id)}>{c.conta}</option>
+                          ))}
+                        </select>
+                        <ChevronDown size={14} className="absolute right-6 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" />
+                      </div>
+                    </div>
+                  )}
                </div>
 
-               <div className="bg-slate-900 p-10 rounded-[2.5rem] relative overflow-hidden group/box">
-                  <div className="absolute top-0 right-0 w-32 h-32 bg-emerald-500/10 blur-[60px]" />
-                  <div className="flex gap-6 relative z-10">
-                     <div className="w-14 h-14 bg-white/5 rounded-2xl flex items-center justify-center text-emerald-500 shrink-0 border border-white/5 shadow-inner">
-                        <ShieldCheck size={28} />
+               {mode === 'sheet' && (
+                 <div className="bg-slate-900 p-10 rounded-[2.5rem] relative overflow-hidden group/box">
+                   <div className="absolute top-0 right-0 w-32 h-32 bg-emerald-500/10 blur-[60px]" />
+                   <div className="flex gap-6 relative z-10">
+                      <div className="w-14 h-14 bg-white/5 rounded-2xl flex items-center justify-center text-emerald-500 shrink-0 border border-white/5 shadow-inner">
+                         <ShieldCheck size={28} />
+                      </div>
+                      <div className="flex-1">
+                         <h4 className="text-lg font-black text-white tracking-tight">Antes de continuar — compartilhe a planilha</h4>
+                         <p className="text-slate-400 text-sm font-medium mt-1 mb-5">
+                           Abra a planilha, clique em <span className="text-white font-bold">Compartilhar</span> e adicione este e-mail como <span className="text-white font-bold">Leitor</span>:
+                         </p>
+                         <code className="block bg-white/5 border border-white/10 p-4 rounded-2xl text-emerald-400 font-mono text-xs select-all cursor-pointer hover:bg-white/10 transition-colors">
+                           seedsync@seedsync-491513.iam.gserviceaccount.com
+                         </code>
+                         <p className="text-slate-600 text-[10px] font-bold uppercase tracking-widest mt-5">A conexão falhará se esta etapa for ignorada.</p>
+                      </div>
+                   </div>
+                 </div>
+               )}
+
+               {mode === 'webhook' && (
+                 <div className="bg-violet-950 p-10 rounded-[2.5rem] relative overflow-hidden">
+                   <div className="absolute top-0 right-0 w-32 h-32 bg-violet-500/10 blur-[60px]" />
+                   <div className="flex gap-6 relative z-10">
+                     <div className="w-14 h-14 bg-white/5 rounded-2xl flex items-center justify-center text-violet-400 shrink-0 border border-white/5">
+                       <Webhook size={28} />
                      </div>
                      <div className="flex-1">
-                        <h4 className="text-lg font-black text-white tracking-tight">Antes de continuar — compartilhe a planilha</h4>
-                        <p className="text-slate-400 text-sm font-medium mt-1 mb-5">
-                          Abra a planilha, clique em <span className="text-white font-bold">Compartilhar</span> e adicione este e-mail como <span className="text-white font-bold">Leitor</span>:
-                        </p>
-                        <code className="block bg-white/5 border border-white/10 p-4 rounded-2xl text-emerald-400 font-mono text-xs select-all cursor-pointer hover:bg-white/10 transition-colors">
-                          seedsync@seedsync-491513.iam.gserviceaccount.com
-                        </code>
-                        <p className="text-slate-600 text-[10px] font-bold uppercase tracking-widest mt-5">A conexão falhará se esta etapa for ignorada.</p>
+                       <h4 className="text-lg font-black text-white tracking-tight">Modo Webhook</h4>
+                       <p className="text-violet-300/70 text-sm font-medium mt-1">
+                         Leads chegam diretamente via <span className="text-white font-bold">Make → POST /webhook/lead</span>. Sem polling de planilha.
+                         Configure o fluxo Make para enviar o <span className="text-white font-bold">conta_id</span> correto desta conta.
+                       </p>
                      </div>
-                  </div>
-               </div>
+                   </div>
+                 </div>
+               )}
 
                <button
                 onClick={handleNextStep1}

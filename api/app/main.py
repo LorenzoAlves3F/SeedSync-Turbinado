@@ -1,12 +1,15 @@
+import hashlib
+import json
 import os
 import re
 from contextlib import asynccontextmanager
+from datetime import datetime, timezone
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import List, Optional
 import httpx
-from .config import SUPABASE_URL, SUPABASE_HEADERS, ZAPI_CLIENT_TOKEN
+from .config import SUPABASE_URL, SUPABASE_HEADERS, ZAPI_CLIENT_TOKEN, WEBHOOK_SECRET
 from .utils.sheets_utils import list_worksheets, get_sheet_columns
 
 @asynccontextmanager
@@ -41,8 +44,10 @@ http_client = httpx.AsyncClient(limits=httpx.Limits(max_connections=50, max_keep
 class ClientConfig(BaseModel):
     client_id: str = ""
     name: str
-    sheet_id: str
-    worksheet_name: str
+    ingestion_mode: str = "sheet"
+    conta_id: Optional[int] = None
+    sheet_id: str = ""
+    worksheet_name: str = ""
     target_table: str = ""
     phone_column: str = "WHATSAPP"
     name_column: str = "NOME"
@@ -56,6 +61,8 @@ class ClientConfig(BaseModel):
 
 class ClientConfigPatch(BaseModel):
     name: Optional[str] = None
+    ingestion_mode: Optional[str] = None
+    conta_id: Optional[int] = None
     sheet_id: Optional[str] = None
     worksheet_name: Optional[str] = None
     phone_column: Optional[str] = None
@@ -66,6 +73,36 @@ class ClientConfigPatch(BaseModel):
     clickup_enabled: Optional[bool] = None
     active: Optional[bool] = None
     google_sa_id: Optional[str] = None
+
+
+# ── Webhook Lead Payload ───────────────────────────────────────────────────
+
+class WebhookLeadContact(BaseModel):
+    name: str = ""
+    phone: str = ""
+
+
+class WebhookLeadAnswer(BaseModel):
+    field_raw: str
+    field_type: str
+    value: str
+
+
+class WebhookLeadCore(BaseModel):
+    form_id: int
+    campaign_id: str
+    adset_id: Optional[str] = None
+    ad_id: Optional[str] = None
+    created_at: str
+    raw_payload: Optional[dict] = None
+
+
+class WebhookLeadPayload(BaseModel):
+    secret: str
+    conta_id: int
+    lead: WebhookLeadCore
+    contact: WebhookLeadContact = WebhookLeadContact()
+    answers: List[WebhookLeadAnswer] = []
 
 
 class GoogleServiceAccount(BaseModel):
@@ -327,6 +364,214 @@ async def get_columns(sheet_id: str, worksheet_name: str):
         return get_sheet_columns(sheet_id, worksheet_name)
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
+
+
+# ──────────────────── Contas ────────────────────
+
+@app.get("/contas")
+async def list_contas():
+    r = await http_client.get(
+        f"{SUPABASE_URL}/rest/v1/contas",
+        headers=SUPABASE_HEADERS,
+        params={"order": "conta.asc"},
+    )
+    if not r.is_success:
+        raise HTTPException(status_code=r.status_code, detail=r.text)
+    return r.json()
+
+
+@app.get("/contas/{conta_id}")
+async def get_conta(conta_id: int):
+    r = await http_client.get(
+        f"{SUPABASE_URL}/rest/v1/contas",
+        headers=SUPABASE_HEADERS,
+        params={"id": f"eq.{conta_id}", "limit": "1"},
+    )
+    if not r.is_success:
+        raise HTTPException(status_code=r.status_code, detail=r.text)
+    data = r.json()
+    if not data:
+        raise HTTPException(status_code=404, detail="Conta not found")
+    return data[0]
+
+
+# ──────────────────── Webhook Lead Ingestion ────────────────────
+
+def _build_whatsapp_message(answers: List[WebhookLeadAnswer]) -> str:
+    msg = "*🔥 NOVO LEAD CAPTURADO!* 🔥\n\n"
+    for ans in answers:
+        field_raw = str(ans.field_raw).strip()
+        value = str(ans.value).strip()
+        if field_raw and "{{" not in field_raw:
+            msg += f"*{field_raw}*: {value}\n"
+    msg += "\n-------------------------\nEnvie uma mensagem agora para o cliente! ⚡"
+    return msg
+
+
+@app.post("/webhook/lead", status_code=201)
+async def webhook_lead(payload: WebhookLeadPayload):
+    """
+    Receive a lead from Make (Facebook Ads) and ingest it directly into Supabase.
+    Replaces the Google Sheets polling path for webhook-mode pipelines.
+
+    Flow: auth → dedup → config lookup → insert leads → insert lead_answers
+          → write ingestion_log → enqueue notification_queue → return 201
+    """
+    # ── Step 0: Auth ──────────────────────────────────────────────────────────
+    if not WEBHOOK_SECRET or payload.secret != WEBHOOK_SECRET:
+        raise HTTPException(status_code=403, detail="Forbidden")
+
+    # ── Step 1: Fingerprint ───────────────────────────────────────────────────
+    name_clean = payload.contact.name.strip().lower()
+    phone_clean = payload.contact.phone.strip().lower()
+    if not name_clean and not phone_clean:
+        payload_str = json.dumps(payload.lead.model_dump(), sort_keys=True)
+    else:
+        payload_str = f"{name_clean}|{phone_clean}"
+    fingerprint = hashlib.sha256(payload_str.encode()).hexdigest()
+
+    # ── Step 2: Dedup check ───────────────────────────────────────────────────
+    dedup_r = await http_client.get(
+        f"{SUPABASE_URL}/rest/v1/ingestion_log",
+        headers=SUPABASE_HEADERS,
+        params={"row_fingerprint": f"eq.{fingerprint}", "status": "eq.inserted",
+                "select": "row_fingerprint", "limit": "1"},
+    )
+    if dedup_r.is_success and dedup_r.json():
+        return {"ok": True, "action": "duplicate_skipped"}
+
+    # ── Step 3: Config lookup ─────────────────────────────────────────────────
+    cfg_r = await http_client.get(
+        f"{SUPABASE_URL}/rest/v1/source_configs",
+        headers=SUPABASE_HEADERS,
+        params={"conta_id": f"eq.{payload.conta_id}", "ingestion_mode": "eq.webhook",
+                "active": "eq.true", "limit": "1"},
+    )
+    if not cfg_r.is_success:
+        raise HTTPException(status_code=502, detail="Config lookup failed")
+    cfg_data = cfg_r.json()
+    if not cfg_data:
+        return {"ok": True, "action": "pipeline_inactive"}
+    conf = cfg_data[0]
+    client_id = conf["client_id"]
+
+    # ── Step 4: Insert seed_sync.leads ────────────────────────────────────────
+    lead_insert: dict = {
+        "form_id": payload.lead.form_id,
+        "conta": payload.conta_id,
+        "campaign_id": payload.lead.campaign_id,
+        "created_at": payload.lead.created_at,
+        "mql": False,
+    }
+    if payload.lead.adset_id:
+        lead_insert["adset_id"] = payload.lead.adset_id
+    if payload.lead.ad_id:
+        lead_insert["ad_id"] = payload.lead.ad_id
+    if payload.lead.raw_payload:
+        lead_insert["raw_payload"] = json.dumps(payload.lead.raw_payload)
+
+    ins_r = await http_client.post(
+        f"{SUPABASE_URL}/rest/v1/leads",
+        headers=SUPABASE_HEADERS,
+        json=lead_insert,
+    )
+    if not ins_r.is_success:
+        raise HTTPException(status_code=502, detail=f"Lead insert failed: {ins_r.text[:200]}")
+    lead_id = ins_r.json()[0]["id"]
+
+    # ── Step 5: Resolve form_fields + insert lead_answers ────────────────────
+    if payload.answers:
+        fields_r = await http_client.get(
+            f"{SUPABASE_URL}/rest/v1/form_fields",
+            headers=SUPABASE_HEADERS,
+            params={"form_id": f"eq.{payload.lead.form_id}", "select": "id,field_raw"},
+        )
+        existing_fields: dict[str, int] = {
+            row["field_raw"]: row["id"]
+            for row in (fields_r.json() if fields_r.is_success else [])
+        }
+
+        for ans in payload.answers:
+            if ans.field_raw not in existing_fields:
+                ff_r = await http_client.post(
+                    f"{SUPABASE_URL}/rest/v1/form_fields",
+                    headers=SUPABASE_HEADERS,
+                    json={"form_id": payload.lead.form_id,
+                          "field_raw": ans.field_raw,
+                          "field_type": ans.field_type},
+                )
+                if ff_r.is_success and ff_r.json():
+                    existing_fields[ans.field_raw] = ff_r.json()[0]["id"]
+
+        answers_to_insert = [
+            {"lead_id": lead_id, "field_id": existing_fields[ans.field_raw], "value": ans.value}
+            for ans in payload.answers
+            if ans.field_raw in existing_fields
+        ]
+        if answers_to_insert:
+            await http_client.post(
+                f"{SUPABASE_URL}/rest/v1/lead_answers",
+                headers=SUPABASE_HEADERS,
+                json=answers_to_insert,
+            )
+
+    # ── Step 6: Write ingestion_log — MUST succeed before notify ─────────────
+    raw_payload_for_log = {
+        "lead_id": lead_id,
+        "conta_id": payload.conta_id,
+        "campaign_id": payload.lead.campaign_id,
+        "contact_name": payload.contact.name,
+        "contact_phone": payload.contact.phone,
+        "answers": [a.model_dump() for a in payload.answers],
+    }
+    log_entry = {
+        "client_id": client_id,
+        "row_fingerprint": fingerprint,
+        "raw_payload": raw_payload_for_log,
+        "status": "inserted",
+        "whatsapp_status": "pending",
+        "processed_at": datetime.now(timezone.utc).isoformat(),
+    }
+    log_r = await http_client.post(
+        f"{SUPABASE_URL}/rest/v1/ingestion_log",
+        headers=SUPABASE_HEADERS,
+        json=log_entry,
+    )
+    if not log_r.is_success:
+        raise HTTPException(status_code=500,
+                            detail=f"ingestion_log write failed: {log_r.text[:200]}")
+
+    # ── Step 7: Enqueue notification_queue ───────────────────────────────────
+    message = _build_whatsapp_message(payload.answers)
+    dest_phones: list[str] = conf.get("destination_phones") or []
+    if not dest_phones and conf.get("legacy_phone"):
+        dest_phones = [conf["legacy_phone"]]
+
+    public_headers = {
+        "apikey": SUPABASE_HEADERS["apikey"],
+        "Authorization": SUPABASE_HEADERS["Authorization"],
+        "Content-Type": "application/json",
+        "Prefer": "return=minimal",
+    }
+    now_iso = datetime.now(timezone.utc).isoformat()
+    for dest in dest_phones:
+        if not dest:
+            continue
+        await http_client.post(
+            f"{SUPABASE_URL}/rest/v1/notification_queue",
+            headers=public_headers,
+            json={
+                "client_id": client_id,
+                "destination_phone": dest,
+                "message": message,
+                "lead_fingerprint": fingerprint,
+                "retry_count": 0,
+                "next_retry_at": now_iso,
+                "status": "pending",
+            },
+        )
+
+    return {"ok": True, "lead_id": lead_id, "action": "ingested"}
 
 
 # ──────────────────── Z-API Delivery Webhook ────────────────────

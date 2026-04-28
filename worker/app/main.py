@@ -117,7 +117,10 @@ async def fast_forward_new_clients(
     Clients where the sheet is unreachable are excluded this cycle entirely
     rather than ingested from row 0 (which would notify on all historical leads).
     """
-    new_clients = [c for c in configs if c.get("last_row_index", 0) == 0]
+    new_clients = [
+        c for c in configs
+        if c.get("last_row_index", 0) == 0 and c.get("ingestion_mode", "sheet") == "sheet"
+    ]
     if not new_clients:
         return configs
 
@@ -376,16 +379,19 @@ async def run_ingestion_batch():
     credentials = await fetch_all_credentials()
 
     all_configs = await fast_forward_new_clients(all_configs, credentials)
-    if not all_configs:
-        log("scheduler", "no_eligible_configs_after_fast_forward")
+
+    # Only sheet-mode clients enter the polling batch — webhook clients are triggered by HTTP
+    sheet_configs = [c for c in all_configs if c.get("ingestion_mode", "sheet") == "sheet"]
+    if not sheet_configs:
+        log("scheduler", "no_eligible_sheet_configs")
         return
 
-    total = len(all_configs)
+    total = len(sheet_configs)
     _client_offset = _client_offset % total
-    batch = all_configs[_client_offset: _client_offset + CLIENTS_PER_BATCH]
+    batch = sheet_configs[_client_offset: _client_offset + CLIENTS_PER_BATCH]
 
     if len(batch) < CLIENTS_PER_BATCH and total > len(batch):
-        batch += all_configs[: CLIENTS_PER_BATCH - len(batch)]
+        batch += sheet_configs[: CLIENTS_PER_BATCH - len(batch)]
 
     # Final safety: Ensure no duplicate client IDs in the SAME batch
     unique_batch = []
@@ -413,7 +419,8 @@ async def run_ingestion_batch():
     await asyncio.gather(*tasks, return_exceptions=True)
 
     _client_offset += CLIENTS_PER_BATCH
-    log("scheduler", "batch_finished", next_offset=_client_offset % total)
+    log("scheduler", "batch_finished", next_offset=_client_offset % total,
+        sheet_clients=total)
 
 
 async def sync_credentials_from_disk() -> None:

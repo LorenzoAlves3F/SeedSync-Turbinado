@@ -2,7 +2,7 @@ import React, { useEffect, useState } from 'react';
 import {
   Activity, Users, Loader2,
   RefreshCw, Zap, ArrowUpRight, ShieldCheck,
-  Clock, TrendingUp, AlertCircle
+  Clock, TrendingUp, AlertCircle, Webhook
 } from 'lucide-react';
 import { fetchConfigs, fetchLogs, syncReset, type SourceConfig, type IngestionLog } from '../lib/api';
 import { ToastContainer } from './Toast';
@@ -222,8 +222,16 @@ const Dashboard: React.FC = () => {
                   </div>
                 </div>
                 <div className="text-right shrink-0 ml-4">
-                  <p className="text-xs font-black text-slate-900">#{c.last_row_index + 1}</p>
-                  <p className="text-[9px] text-slate-400 uppercase font-black tracking-widest">Linha</p>
+                  {c.ingestion_mode === 'webhook' ? (
+                    <span className="inline-flex items-center gap-1 px-2 py-1 rounded-lg bg-violet-500/10 text-violet-600 text-[9px] font-black uppercase tracking-widest">
+                      <Webhook size={8} /> WEBHOOK
+                    </span>
+                  ) : (
+                    <>
+                      <p className="text-xs font-black text-slate-900">#{c.last_row_index + 1}</p>
+                      <p className="text-[9px] text-slate-400 uppercase font-black tracking-widest">Linha</p>
+                    </>
+                  )}
                 </div>
               </div>
             ))}

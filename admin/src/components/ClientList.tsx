@@ -2,7 +2,7 @@ import React, { useEffect, useState } from 'react';
 import {
   Search, Trash2, ExternalLink,
   Loader2, RefreshCw, FileText, Settings2,
-  Database, Phone, Hash, RotateCcw, Check, X
+  Database, Phone, Hash, RotateCcw, Check, X, Webhook
 } from 'lucide-react';
 
 import { fetchConfigs, updateConfig, deleteConfig, resetCursor, type SourceConfig } from '../lib/api';
@@ -180,9 +180,14 @@ const ClientList: React.FC<ClientListProps> = ({ onViewLogs, onEdit }) => {
               <div className="grid grid-cols-2 gap-4 pt-6 border-t border-slate-50 mb-8">
                  <div className="space-y-1">
                     <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest flex items-center gap-1.5">
-                      <Hash size={10} /> Linha Atual
+                      {c.ingestion_mode === 'webhook' ? <Webhook size={10} /> : <Hash size={10} />}
+                      {c.ingestion_mode === 'webhook' ? 'Fonte' : 'Linha Atual'}
                     </p>
-                    {resetting === c.client_id ? (
+                    {c.ingestion_mode === 'webhook' ? (
+                      <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-xl bg-violet-500/10 text-violet-600 text-[9px] font-black uppercase tracking-widest">
+                        <Webhook size={9} /> WEBHOOK
+                      </span>
+                    ) : resetting === c.client_id ? (
                       <div className="flex items-center gap-1.5">
                         <input
                           type="number"
@@ -223,13 +228,19 @@ const ClientList: React.FC<ClientListProps> = ({ onViewLogs, onEdit }) => {
 
               {/* Quick Actions */}
               <div className="mt-auto flex items-center justify-between gap-3 pt-6">
-                <a
-                  href={`https://docs.google.com/spreadsheets/d/${c.sheet_id}/edit`}
-                  target="_blank" rel="noreferrer"
-                  className="px-5 py-3 rounded-2xl bg-slate-900 text-white text-[10px] font-black uppercase tracking-widest hover:bg-black transition-all flex items-center gap-2 shadow-lg"
-                >
-                  Planilha <ExternalLink size={12} />
-                </a>
+                {c.ingestion_mode === 'webhook' ? (
+                  <span className="px-5 py-3 rounded-2xl bg-violet-500/10 text-violet-600 text-[10px] font-black uppercase tracking-widest flex items-center gap-2">
+                    <Webhook size={12} /> Webhook
+                  </span>
+                ) : (
+                  <a
+                    href={`https://docs.google.com/spreadsheets/d/${c.sheet_id}/edit`}
+                    target="_blank" rel="noreferrer"
+                    className="px-5 py-3 rounded-2xl bg-slate-900 text-white text-[10px] font-black uppercase tracking-widest hover:bg-black transition-all flex items-center gap-2 shadow-lg"
+                  >
+                    Planilha <ExternalLink size={12} />
+                  </a>
+                )}
 
                 <button
                   onClick={() => handleToggle(c)}

@@ -22,6 +22,8 @@ export interface SourceConfig {
   id: string;
   client_id: string;
   name: string;
+  ingestion_mode: 'sheet' | 'webhook';
+  conta_id: number | null;
   sheet_id: string;
   worksheet_name: string;
   target_table: string;
@@ -36,6 +38,12 @@ export interface SourceConfig {
   google_sa_id: string | null;
   created_at: string;
   updated_at: string;
+}
+
+export interface Conta {
+  id: number;
+  conta: string;
+  mql: boolean | null;
 }
 
 export interface ConfigStats {
@@ -89,6 +97,10 @@ export const fetchLogs = (params?: {
   status?: string;
   whatsapp_status?: string;
 }) => api.get<IngestionLog[]>('/logs', { params }).then(r => r.data);
+
+// ─── Contas ──────────────────────────────────────────────
+
+export const fetchContas = () => api.get<Conta[]>('/contas').then(r => r.data);
 
 // ─── Sheets ──────────────────────────────────────────────
 
