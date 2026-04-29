@@ -175,7 +175,7 @@ async def create_config(config: ClientConfig):
     r = await http_client.post(
         f"{SUPABASE_URL}/rest/v1/source_configs",
         headers=SUPABASE_HEADERS,
-        json=config.model_dump(),
+        json=config.model_dump(exclude_none=True),
     )
     if not r.is_success:
         raise HTTPException(status_code=r.status_code, detail=r.text)
