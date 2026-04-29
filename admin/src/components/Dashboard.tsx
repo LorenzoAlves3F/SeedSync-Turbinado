@@ -4,7 +4,7 @@ import {
   RefreshCw, Zap, ArrowUpRight, ShieldCheck,
   Clock, TrendingUp, AlertCircle, Webhook, MailWarning, RotateCcw
 } from 'lucide-react';
-import { fetchConfigs, fetchLogs, syncReset, fetchQueueStats, resetDeadQueue, type SourceConfig, type IngestionLog, type QueueStats } from '../lib/api';
+import { fetchConfigs, fetchLogs, syncReset, fetchQueueStats, resetDeadQueue, retrySelectedQueue, type SourceConfig, type IngestionLog, type QueueStats } from '../lib/api';
 import { ToastContainer } from './Toast';
 import { useToast } from '../hooks/useToast';
 
@@ -15,6 +15,8 @@ const Dashboard: React.FC = () => {
   const [loading, setLoading] = useState(true);
   const [syncing, setSyncing] = useState(false);
   const [resettingQueue, setResettingQueue] = useState(false);
+  const [retryingSelected, setRetryingSelected] = useState(false);
+  const [selectedDeadIds, setSelectedDeadIds] = useState<Set<number>>(new Set());
   const { toasts, addToast, dismissToast } = useToast();
 
   const load = async () => {
@@ -44,6 +46,7 @@ const Dashboard: React.FC = () => {
         res.reset > 0
           ? `${res.reset} mensagem(ns) morta(s) reativada(s) para reenvio.`
           : 'Nenhuma mensagem morta encontrada.');
+      setSelectedDeadIds(new Set());
       await load();
     } catch (e: unknown) {
       const error = e instanceof Error ? e : new Error('Erro desconhecido');
@@ -51,6 +54,37 @@ const Dashboard: React.FC = () => {
     } finally {
       setResettingQueue(false);
     }
+  };
+
+  const handleRetrySelected = async () => {
+    if (retryingSelected || selectedDeadIds.size === 0) return;
+    setRetryingSelected(true);
+    try {
+      const res = await retrySelectedQueue(Array.from(selectedDeadIds));
+      addToast('success', 'Mensagens Reativadas',
+        `${res.reset} mensagem(ns) enviada(s) para reprocessamento.`);
+      setSelectedDeadIds(new Set());
+      await load();
+    } catch (e: unknown) {
+      const error = e instanceof Error ? e : new Error('Erro desconhecido');
+      addToast('error', 'Falha ao Reativar', error.message);
+    } finally {
+      setRetryingSelected(false);
+    }
+  };
+
+  const handleToggleSelect = (id: number) => {
+    setSelectedDeadIds(prev => {
+      const next = new Set(prev);
+      next.has(id) ? next.delete(id) : next.add(id);
+      return next;
+    });
+  };
+
+  const handleSelectAll = (entries: { id: number }[]) => {
+    setSelectedDeadIds(prev =>
+      prev.size === entries.length ? new Set() : new Set(entries.map(e => e.id))
+    );
   };
 
   const handleSyncReset = async () => {
@@ -271,25 +305,10 @@ const Dashboard: React.FC = () => {
               <MailWarning className="text-amber-500" size={16} />
               Fila de Notificações
             </h3>
-            <button
-              onClick={handleResetDeadQueue}
-              disabled={resettingQueue || queueStats.dead === 0}
-              className={`flex items-center gap-2 px-5 py-2.5 rounded-2xl text-xs font-black transition-all ${
-                resettingQueue || queueStats.dead === 0
-                  ? 'bg-slate-100 text-slate-400 cursor-not-allowed'
-                  : 'bg-red-500/10 text-red-600 hover:bg-red-500/20 border border-red-200'
-              }`}
-            >
-              {resettingQueue ? (
-                <Loader2 className="animate-spin" size={14} />
-              ) : (
-                <RotateCcw size={14} />
-              )}
-              {resettingQueue ? 'Resetando...' : `Reativar Mortas (${queueStats.dead})`}
-            </button>
           </div>
 
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+          {/* Contadores */}
+          <div className="grid grid-cols-2 gap-4">
             <div className="bg-white rounded-3xl p-6 border border-slate-100 shadow-xl shadow-slate-200/40">
               <p className="text-3xl font-black text-slate-900 tracking-tighter leading-none mb-2">{queueStats.pending}</p>
               <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Pendentes</p>
@@ -300,27 +319,78 @@ const Dashboard: React.FC = () => {
             </div>
           </div>
 
-          {queueStats.recent.length > 0 && (
+          {/* Mensagens mortas com seleção individual */}
+          {queueStats.dead_entries.length > 0 && (
             <div className="bg-white rounded-[2.5rem] border border-slate-100 shadow-xl shadow-slate-200/40 overflow-hidden">
-              <div className="p-6 border-b border-slate-100">
-                <p className="text-xs font-black text-slate-500 uppercase tracking-widest">Entradas Recentes</p>
-              </div>
-              <div className="divide-y divide-slate-100 max-h-64 overflow-y-auto custom-scrollbar">
-                {queueStats.recent.map(entry => (
-                  <div key={entry.id} className="flex items-center gap-4 px-6 py-3 hover:bg-slate-50 transition-colors">
-                    <span className={`px-2 py-0.5 rounded-md text-[9px] font-black uppercase tracking-tighter shrink-0 ${
-                      entry.status === 'sent' ? 'bg-emerald-500/10 text-emerald-600' :
-                      entry.status === 'dead' ? 'bg-red-500/10 text-red-600' :
-                      'bg-amber-500/10 text-amber-600'
-                    }`}>
-                      {entry.status}
-                    </span>
-                    <span className="text-xs font-black text-slate-700 shrink-0">{entry.client_id}</span>
-                    <span className="text-xs text-slate-400 truncate flex-1">{entry.destination_phone}</span>
-                    {entry.retry_count > 0 && (
-                      <span className="text-[10px] font-bold text-slate-400 shrink-0">{entry.retry_count}x</span>
+              <div className="flex items-center justify-between p-6 border-b border-slate-100">
+                <label className="flex items-center gap-3 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={selectedDeadIds.size === queueStats.dead_entries.length}
+                    onChange={() => handleSelectAll(queueStats.dead_entries)}
+                    className="w-4 h-4 rounded accent-red-500"
+                  />
+                  <p className="text-xs font-black text-slate-500 uppercase tracking-widest">
+                    Mensagens Mortas
+                    {selectedDeadIds.size > 0 && (
+                      <span className="ml-2 text-red-500 normal-case tracking-normal font-bold">
+                        — {selectedDeadIds.size} selecionada{selectedDeadIds.size > 1 ? 's' : ''}
+                      </span>
                     )}
-                  </div>
+                  </p>
+                </label>
+                <div className="flex items-center gap-2">
+                  {selectedDeadIds.size > 0 && (
+                    <button
+                      onClick={handleRetrySelected}
+                      disabled={retryingSelected}
+                      className="flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-black bg-red-500 text-white hover:bg-red-600 transition-all disabled:opacity-50"
+                    >
+                      {retryingSelected ? <Loader2 className="animate-spin" size={12} /> : <RotateCcw size={12} />}
+                      Reativar ({selectedDeadIds.size})
+                    </button>
+                  )}
+                  <button
+                    onClick={handleResetDeadQueue}
+                    disabled={resettingQueue}
+                    className="flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-black bg-slate-100 text-slate-600 hover:bg-slate-200 transition-all disabled:opacity-50"
+                  >
+                    {resettingQueue ? <Loader2 className="animate-spin" size={12} /> : <RotateCcw size={12} />}
+                    Reativar Todas
+                  </button>
+                </div>
+              </div>
+
+              <div className="divide-y divide-slate-100 max-h-96 overflow-y-auto custom-scrollbar">
+                {queueStats.dead_entries.map(entry => (
+                  <label
+                    key={entry.id}
+                    className="flex items-start gap-4 px-6 py-4 hover:bg-red-50/30 transition-colors cursor-pointer"
+                  >
+                    <input
+                      type="checkbox"
+                      checked={selectedDeadIds.has(entry.id)}
+                      onChange={() => handleToggleSelect(entry.id)}
+                      className="mt-1 w-4 h-4 rounded accent-red-500 shrink-0"
+                    />
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2 mb-1 flex-wrap">
+                        <span className="text-xs font-black text-slate-700">{entry.client_id}</span>
+                        <span className="text-xs text-slate-400">{entry.destination_phone}</span>
+                        {entry.retry_count > 0 && (
+                          <span className="px-1.5 py-0.5 rounded text-[9px] font-black bg-red-100 text-red-600">
+                            {entry.retry_count}x falhou
+                          </span>
+                        )}
+                      </div>
+                      <p className="text-[11px] text-slate-500 truncate">
+                        {entry.message.split('\n').filter(l => l.trim() && !l.includes('🔥') && !l.includes('---')).slice(0, 2).join(' · ')}
+                      </p>
+                      {entry.last_error && (
+                        <p className="text-[10px] text-red-400 truncate mt-0.5">{entry.last_error}</p>
+                      )}
+                    </div>
+                  </label>
                 ))}
               </div>
             </div>

@@ -116,6 +116,7 @@ export interface QueueEntry {
 export interface QueueStats {
   pending: number;
   dead: number;
+  dead_entries: QueueEntry[];
   recent: QueueEntry[];
 }
 
@@ -123,6 +124,9 @@ export const fetchQueueStats = () => api.get<QueueStats>('/queue').then(r => r.d
 
 export const resetDeadQueue = () =>
   api.post<{ reset: number; entries: QueueEntry[] }>('/queue/reset-dead').then(r => r.data);
+
+export const retrySelectedQueue = (ids: number[]) =>
+  api.post<{ reset: number; entries: QueueEntry[] }>('/queue/retry-selected', { ids }).then(r => r.data);
 
 // ─── Contas ──────────────────────────────────────────────
 
