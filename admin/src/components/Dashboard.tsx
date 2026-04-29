@@ -2,32 +2,54 @@ import React, { useEffect, useState } from 'react';
 import {
   Activity, Users, Loader2,
   RefreshCw, Zap, ArrowUpRight, ShieldCheck,
-  Clock, TrendingUp, AlertCircle, Webhook
+  Clock, TrendingUp, AlertCircle, Webhook, MailWarning, RotateCcw
 } from 'lucide-react';
-import { fetchConfigs, fetchLogs, syncReset, type SourceConfig, type IngestionLog } from '../lib/api';
+import { fetchConfigs, fetchLogs, syncReset, fetchQueueStats, resetDeadQueue, type SourceConfig, type IngestionLog, type QueueStats } from '../lib/api';
 import { ToastContainer } from './Toast';
 import { useToast } from '../hooks/useToast';
 
 const Dashboard: React.FC = () => {
   const [configs, setConfigs] = useState<SourceConfig[]>([]);
   const [recentLogs, setRecentLogs] = useState<IngestionLog[]>([]);
+  const [queueStats, setQueueStats] = useState<QueueStats | null>(null);
   const [loading, setLoading] = useState(true);
   const [syncing, setSyncing] = useState(false);
+  const [resettingQueue, setResettingQueue] = useState(false);
   const { toasts, addToast, dismissToast } = useToast();
 
   const load = async () => {
     setLoading(true);
     try {
-      const [cfgs, logs] = await Promise.all([
+      const [cfgs, logs, queue] = await Promise.all([
         fetchConfigs(),
         fetchLogs({ limit: 20 }),
+        fetchQueueStats(),
       ]);
       setConfigs(cfgs);
       setRecentLogs(logs);
+      setQueueStats(queue);
     } catch (e: unknown) {
       console.error('Falha ao carregar dashboard', e);
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handleResetDeadQueue = async () => {
+    if (resettingQueue) return;
+    setResettingQueue(true);
+    try {
+      const res = await resetDeadQueue();
+      addToast('success', 'Fila Resetada',
+        res.reset > 0
+          ? `${res.reset} mensagem(ns) morta(s) reativada(s) para reenvio.`
+          : 'Nenhuma mensagem morta encontrada.');
+      await load();
+    } catch (e: unknown) {
+      const error = e instanceof Error ? e : new Error('Erro desconhecido');
+      addToast('error', 'Falha ao Resetar Fila', error.message);
+    } finally {
+      setResettingQueue(false);
     }
   };
 
@@ -241,6 +263,71 @@ const Dashboard: React.FC = () => {
           </button>
         </section>
       </div>
+      {/* Painel de Fila de Notificações */}
+      {queueStats && (
+        <section className="space-y-6">
+          <div className="flex items-center justify-between px-2">
+            <h3 className="text-sm font-black text-slate-900 uppercase tracking-widest flex items-center gap-3">
+              <MailWarning className="text-amber-500" size={16} />
+              Fila de Notificações
+            </h3>
+            <button
+              onClick={handleResetDeadQueue}
+              disabled={resettingQueue || queueStats.dead === 0}
+              className={`flex items-center gap-2 px-5 py-2.5 rounded-2xl text-xs font-black transition-all ${
+                resettingQueue || queueStats.dead === 0
+                  ? 'bg-slate-100 text-slate-400 cursor-not-allowed'
+                  : 'bg-red-500/10 text-red-600 hover:bg-red-500/20 border border-red-200'
+              }`}
+            >
+              {resettingQueue ? (
+                <Loader2 className="animate-spin" size={14} />
+              ) : (
+                <RotateCcw size={14} />
+              )}
+              {resettingQueue ? 'Resetando...' : `Reativar Mortas (${queueStats.dead})`}
+            </button>
+          </div>
+
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+            <div className="bg-white rounded-3xl p-6 border border-slate-100 shadow-xl shadow-slate-200/40">
+              <p className="text-3xl font-black text-slate-900 tracking-tighter leading-none mb-2">{queueStats.pending}</p>
+              <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Pendentes</p>
+            </div>
+            <div className={`rounded-3xl p-6 border shadow-xl shadow-slate-200/40 ${queueStats.dead > 0 ? 'bg-red-50/50 border-red-100 ring-2 ring-red-200/50' : 'bg-white border-slate-100'}`}>
+              <p className={`text-3xl font-black tracking-tighter leading-none mb-2 ${queueStats.dead > 0 ? 'text-red-600' : 'text-slate-900'}`}>{queueStats.dead}</p>
+              <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Mortas</p>
+            </div>
+          </div>
+
+          {queueStats.recent.length > 0 && (
+            <div className="bg-white rounded-[2.5rem] border border-slate-100 shadow-xl shadow-slate-200/40 overflow-hidden">
+              <div className="p-6 border-b border-slate-100">
+                <p className="text-xs font-black text-slate-500 uppercase tracking-widest">Entradas Recentes</p>
+              </div>
+              <div className="divide-y divide-slate-100 max-h-64 overflow-y-auto custom-scrollbar">
+                {queueStats.recent.map(entry => (
+                  <div key={entry.id} className="flex items-center gap-4 px-6 py-3 hover:bg-slate-50 transition-colors">
+                    <span className={`px-2 py-0.5 rounded-md text-[9px] font-black uppercase tracking-tighter shrink-0 ${
+                      entry.status === 'sent' ? 'bg-emerald-500/10 text-emerald-600' :
+                      entry.status === 'dead' ? 'bg-red-500/10 text-red-600' :
+                      'bg-amber-500/10 text-amber-600'
+                    }`}>
+                      {entry.status}
+                    </span>
+                    <span className="text-xs font-black text-slate-700 shrink-0">{entry.client_id}</span>
+                    <span className="text-xs text-slate-400 truncate flex-1">{entry.destination_phone}</span>
+                    {entry.retry_count > 0 && (
+                      <span className="text-[10px] font-bold text-slate-400 shrink-0">{entry.retry_count}x</span>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </section>
+      )}
+
       <ToastContainer toasts={toasts} onDismiss={dismissToast} />
     </div>
   );

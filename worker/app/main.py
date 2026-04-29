@@ -144,24 +144,35 @@ async def fast_forward_new_clients(
 
 
 async def check_zapi_session() -> bool:
-    """Return True if Z-API WhatsApp session is connected. Always True in DRY_RUN."""
+    """Return True when Z-API is connected or when the status check itself is inconclusive.
+
+    The retry queue must NOT be blocked by network errors or auth issues on the
+    status endpoint — those are separate from whether sends will succeed.
+    Only returns False when Z-API explicitly confirms disconnected (connected: false).
+    """
     if DRY_RUN:
         return True
     try:
         r = await http_client.get(
             f"{ZAPI_BASE_URL}status",
             headers={"Client-Token": ZAPI_CLIENT_TOKEN},
+            timeout=10.0,
         )
         if r.is_success:
             connected = r.json().get("connected", False)
             if not connected:
                 log("worker", "zapi_session_disconnected", response=r.text[:200])
             return connected
-        log("worker", "zapi_status_check_failed", status_code=r.status_code, error=r.text[:200])
-        return False
+        # Non-2xx (401, 404, 500…) — can't confirm disconnected, proceed optimistically
+        # so the retry queue is not permanently blocked by a bad token or endpoint issue
+        log("worker", "zapi_status_check_failed", status_code=r.status_code,
+            error=r.text[:200], action="proceeding_optimistically")
+        return True
     except Exception as e:
-        log("worker", "zapi_status_check_exception", error=str(e))
-        return False
+        # Network error / timeout — can't confirm disconnected, proceed optimistically
+        log("worker", "zapi_status_check_exception", error=str(e),
+            action="proceeding_optimistically")
+        return True
 
 
 async def process_client(conf: Dict[str, Any], credentials: dict[str, str], zapi_ok: bool = True):

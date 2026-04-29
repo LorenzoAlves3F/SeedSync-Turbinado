@@ -366,6 +366,51 @@ async def get_columns(sheet_id: str, worksheet_name: str):
         raise HTTPException(status_code=400, detail=str(e))
 
 
+# ──────────────────── Notification Queue ────────────────────
+
+@app.get("/queue")
+async def get_queue_stats():
+    """Stats and recent entries from the notification retry queue."""
+    pending_r = await http_client.get(
+        f"{SUPABASE_URL}/rest/v1/notification_queue",
+        headers=_PUBLIC_HEADERS,
+        params={"status": "eq.pending", "select": "id", "limit": "500"},
+    )
+    dead_r = await http_client.get(
+        f"{SUPABASE_URL}/rest/v1/notification_queue",
+        headers=_PUBLIC_HEADERS,
+        params={"status": "eq.dead", "select": "id", "limit": "500"},
+    )
+    recent_r = await http_client.get(
+        f"{SUPABASE_URL}/rest/v1/notification_queue",
+        headers=_PUBLIC_HEADERS,
+        params={"order": "created_at.desc", "limit": "20"},
+    )
+    return {
+        "pending": len(pending_r.json()) if pending_r.is_success else -1,
+        "dead": len(dead_r.json()) if dead_r.is_success else -1,
+        "recent": recent_r.json() if recent_r.is_success else [],
+    }
+
+
+@app.post("/queue/reset-dead")
+async def reset_dead_queue_entries():
+    """Reset all dead notification_queue entries back to pending so the worker retries them."""
+    from datetime import datetime, timezone
+    now_iso = datetime.now(timezone.utc).isoformat()
+    r = await http_client.patch(
+        f"{SUPABASE_URL}/rest/v1/notification_queue",
+        headers={**_PUBLIC_HEADERS, "Prefer": "return=representation"},
+        params={"status": "eq.dead"},
+        json={"status": "pending", "retry_count": 0, "next_retry_at": now_iso,
+              "last_error": None},
+    )
+    if not r.is_success:
+        raise HTTPException(status_code=r.status_code, detail=r.text)
+    reset = r.json()
+    return {"reset": len(reset), "entries": reset}
+
+
 # ──────────────────── Contas ────────────────────
 
 @app.get("/contas")

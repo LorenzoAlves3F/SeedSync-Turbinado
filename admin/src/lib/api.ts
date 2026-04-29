@@ -98,6 +98,32 @@ export const fetchLogs = (params?: {
   whatsapp_status?: string;
 }) => api.get<IngestionLog[]>('/logs', { params }).then(r => r.data);
 
+// ─── Queue ───────────────────────────────────────────────
+
+export interface QueueEntry {
+  id: number;
+  client_id: string;
+  destination_phone: string;
+  message: string;
+  lead_fingerprint: string;
+  retry_count: number;
+  next_retry_at: string;
+  status: 'pending' | 'sent' | 'dead';
+  last_error: string | null;
+  created_at: string;
+}
+
+export interface QueueStats {
+  pending: number;
+  dead: number;
+  recent: QueueEntry[];
+}
+
+export const fetchQueueStats = () => api.get<QueueStats>('/queue').then(r => r.data);
+
+export const resetDeadQueue = () =>
+  api.post<{ reset: number; entries: QueueEntry[] }>('/queue/reset-dead').then(r => r.data);
+
 // ─── Contas ──────────────────────────────────────────────
 
 export const fetchContas = () => api.get<Conta[]>('/contas').then(r => r.data);
