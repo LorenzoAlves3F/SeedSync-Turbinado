@@ -1,3 +1,4 @@
+import asyncio
 from ..http_client import http_client
 from typing import Any
 from ..config import SUPABASE_URL, SUPABASE_HEADERS, DRY_RUN
@@ -69,6 +70,7 @@ async def ensure_table_columns(table_name: str, sample_row: dict[str, Any]) -> b
                 return False
             log("schema", "table_created", table=table_name)
             await reload_pgrst_schema()
+            await asyncio.sleep(2)  # wait for PostgREST to process the pg_notify
             return True
 
         # Step 2: Sync columns
@@ -95,6 +97,7 @@ async def ensure_table_columns(table_name: str, sample_row: dict[str, Any]) -> b
                 return False
             log("schema", "columns_added", table=table_name, count=len(incoming_cols))
             await reload_pgrst_schema()
+            await asyncio.sleep(2)  # wait for PostgREST to process the pg_notify
 
         return True
 

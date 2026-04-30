@@ -193,6 +193,7 @@ class LeadIngester:
                     column=col, error=add_res.text[:ERROR_TEXT_MAX_LEN])
 
             await reload_pgrst_schema()
+            await asyncio.sleep(1)  # wait for PostgREST to process the pg_notify
 
         return res  # type: ignore[return-value]  # unreachable but satisfies type checker
 
